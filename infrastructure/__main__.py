@@ -1,14 +1,26 @@
 from openstack import connection, exceptions
 import yaml
 import os.path
+import logging
+import sys
+import json
+
+DEFAULT_CONFIG_PATH = '~/.config/stuartw.io/infrastructure/config.yaml'
 
 
 class ResourceSpec(object):
 
+    _logger = logging.getLogger(__name__)
+
     def apply(self, conn):
+        self._logger.info("Checking if {} resource exist...".format(self.__class__.__name__))
         resource = self.fetch(conn)
         if resource is None:
+            self._logger.info("{} resource does not exist! Creating resource...".format(self.__class__.__name__))
             resource = self.create(conn)
+            self._logger.info("{} resource created!".format(self.__class__.__name__))
+        else:
+            self._logger.info("{} resource exists!".format(self.__class__.__name__))
         return resource
 
     def fetch(self, conn):
@@ -16,6 +28,12 @@ class ResourceSpec(object):
 
     def create(self, conn):
         raise NotImplementedError("create not implemented")
+
+
+class Resource(object):
+
+    def __repr__(self):
+        return "{}({})".format(self.__class__.__name__, self.__dict__)
 
 
 def first(gen):
@@ -30,34 +48,36 @@ class ExternalNetworkSpec(ResourceSpec):
     def fetch(self, conn):
         return first(conn.network.networks(name='ext-net'))
 
-    def create(self, conn):
-        raise ValueError("cannot create ext-net")
-
 
 class DevelopmentNetworkSpec(ResourceSpec):
 
+    _name = 'dev.stuartw.io'
+
     def fetch(self, conn):
-        return first(conn.network.networks(name='stuartwio-development-network'))
+        return first(conn.network.networks(name=self._name))
 
     def create(self, conn):
         return conn.network.create_network(
-            name='stuartwio-development-network'
+            name=self._name
         )
 
 
 class DevelopmentSubnetSpec(ResourceSpec):
 
+    # Removing extra subnets as we don't appear to have zones
+    # i.e. privately networked intra-region datacentre locations
+    # in City Cloud. If we start to care more about disaster
+    # recovery, we can do same geography region high-availability.
+
     _cidr = dict(
-        a='10.0.1.0/24',
-        b='10.0.2.0/24',
-        c='10.0.3.0/24'
+        a='10.0.1.0/24'
     )
 
     _gateway_id = dict(
-        a='10.0.1.1',
-        b='10.0.2.1',
-        c='10.0.3.1'
+        a='10.0.1.1'
     )
+
+    _name_template = '{}.subnet.dev.stuartw.io'
 
     def __init__(self, suffix):
         self._suffix = suffix
@@ -65,13 +85,13 @@ class DevelopmentSubnetSpec(ResourceSpec):
         self._router_spec = DevelopmentRouterSpec()
 
     def fetch(self, conn):
-        return first(conn.network.subnets(name='stuartwio-development-subnet-{}'.format(self._suffix)))
+        return first(conn.network.subnets(name=self._name_template.format(self._suffix)))
 
     def create(self, conn):
         network = self._network_spec.apply(conn)
         router = self._router_spec.apply(conn)
         subnet = conn.network.create_subnet(
-            name='stuartwio-development-subnet-{}'.format(self._suffix),
+            name=self._name_template.format(self._suffix),
             network_id=network.id,
             ip_version='4',
             cidr=self._cidr[self._suffix],
@@ -83,15 +103,17 @@ class DevelopmentSubnetSpec(ResourceSpec):
 
 class DevelopmentRouterSpec(ResourceSpec):
 
+    _name = 'router.dev.stuartw.io'
+
     def __init__(self):
         self._external_network_spec = ExternalNetworkSpec()
 
     def fetch(self, conn):
-        return first(conn.network.routers(name='stuartwio-development-router'))
+        return first(conn.network.routers(name=self._name))
 
     def create(self, conn):
         return conn.network.create_router(
-            name='stuartwio-development-router',
+            name=self._name,
             external_gateway_info=dict(
                 network_id=self._external_network_spec.apply(conn).id
             )
@@ -104,47 +126,40 @@ class DevelopmentNetworkStackSpec(ResourceSpec):
         self._network_spec = DevelopmentNetworkSpec()
         self._router_spec = DevelopmentRouterSpec()
         self._subnet_a_spec = DevelopmentSubnetSpec('a')
-        self._subnet_b_spec = DevelopmentSubnetSpec('b')
-        self._subnet_c_spec = DevelopmentSubnetSpec('c')
 
     def fetch(self, conn):
         return DevelopmentNetworkStackResource(
             network=self._network_spec.apply(conn),
             router=self._router_spec.apply(conn),
-            subnet_a=self._subnet_a_spec.apply(conn),
-            subnet_b=self._subnet_b_spec.apply(conn),
-            subnet_c=self._subnet_c_spec.apply(conn)
+            subnet_a=self._subnet_a_spec.apply(conn)
         )
 
-    def create(self, conn):
-        raise ValueError('cannot create infrastructure directly')
 
+class DevelopmentNetworkStackResource(Resource):
 
-class DevelopmentNetworkStackResource(object):
-
-    def __init__(self, network, router, subnet_a, subnet_b, subnet_c):
+    def __init__(self, network, router, subnet_a):
         self.network = network
         self.router = router
         self.subnet_a = subnet_a
-        self.subnet_b = subnet_b
-        self.subnet_c = subnet_c
 
 
 class DevelopmentServerKeyPairSpec(ResourceSpec):
 
+    name = 'stuartwiodev'
+
     def fetch(self, conn):
         try:
-            return conn.compute.get_keypair('stuartwiodev')
+            return conn.compute.get_keypair(self.name)
         except exceptions.ResourceNotFound:
             return None
 
     def create(self, conn):
-        key_pair = conn.compute.create_keypair(name='stuartwiodev')
+        key_pair = conn.compute.create_keypair(name=self.name)
 
-        with open(os.path.join(os.getcwd(), 'stuartwiodev.pub'), 'w') as f:
+        with open(os.path.join(os.getcwd(), '{}.pub'.format(self.name)), 'w') as f:
             f.write(key_pair.public_key)
 
-        with open(os.path.join(os.getcwd(), 'stuartwiodev.pem'), 'w') as f:
+        with open(os.path.join(os.getcwd(), '{}.pem'.format(self.name)), 'w') as f:
             f.write(key_pair.private_key)
 
         return key_pair
@@ -152,52 +167,86 @@ class DevelopmentServerKeyPairSpec(ResourceSpec):
 
 class DevelopmentServerSpec(ResourceSpec):
 
+    _name = 'main.dev.stuartw.io'
+
     def fetch(self, conn):
-        raise NotImplementedError()
+        return conn.compute.find_server(self._name)
 
     def create(self, conn):
-        raise NotImplementedError()
+        # FIXME: This may need to wait for the server to fully initialize
+        return conn.compute.create_server(
+            name=self._name,
+            key_name=DevelopmentServerKeyPairSpec().name,
+            flavor_id=conn.compute.find_flavor('2C-4GB-50GB').id,
+            image_id=conn.compute.find_image('CoreOS 1068.9.0').id,
+            networks=[
+                dict(
+                    uuid=DevelopmentNetworkStackSpec().apply(conn).network.id
+                )
+            ]
+        )
+
+
+class DevelopmentServerFloatingIpSpec(ResourceSpec):
+
+    def fetch(self, conn):
+        server = DevelopmentServerSpec().apply(conn)
+        port = first(conn.network.ports(device_id=server.id))
+        ip = conn.network.ips(port_id=port.id)
+        return first(ip)
+
+    def create(self, conn):
+        server = DevelopmentServerSpec().apply(conn)
+        port = first(conn.network.ports(device_id=server.id))
+        return conn.network.create_ip(
+            port_id=port.id,
+            floating_network_id=ExternalNetworkSpec().apply(conn).id
+        )
+
+
+class DevelopmentServerStackSpec(ResourceSpec):
+
+    def __init__(self):
+        self._network_stack_spec = DevelopmentNetworkStackSpec()
+        self._key_pair_spec = DevelopmentServerKeyPairSpec()
+        self._server_spec = DevelopmentServerSpec()
+        self._floating_ip_spec = DevelopmentServerFloatingIpSpec()
+
+    def fetch(self, conn):
+        return DevelopmentServerStackResource(
+            network_stack=self._network_stack_spec.apply(conn),
+            key_pair=self._key_pair_spec.apply(conn),
+            server=self._server_spec.apply(conn),
+            floating_ip=self._floating_ip_spec.apply(conn)
+        )
+
+
+class DevelopmentServerStackResource(Resource):
+
+    def __init__(self, network_stack, key_pair, server, floating_ip):
+        self.network_stack = network_stack
+        self.key_pair = key_pair
+        self.server = server
+        self.floating_ip = floating_ip
 
 
 def readconfig():
-    with open(os.path.join(os.path.expanduser('~'), '.stuartwio', 'infrastructure.yaml')) as f:
+    with open(os.path.expanduser(DEFAULT_CONFIG_PATH)) as f:
         return yaml.load(f.read())
 
+
 def main():
+
+    logger = logging.getLogger()
+    handler = logging.StreamHandler(sys.stdout)
+    logger.addHandler(handler)
+    logger.setLevel(logging.INFO)
 
     config = readconfig()
     conn = connection.from_config(config['citycloud']['cloud_name'])
 
-    # flavors = [flavor
-    #            for flavor in conn.compute.flavors()
-    #            if flavor.vcpus == 2
-    #            and 4000 < flavor.ram < 5000
-    #            and flavor.disk == 50]
-    #
-    # for flavor in flavors:
-    #     print(flavor)
-
-    # print(conn.compute.find_flavor('2C-4GB-50GB'))
-    # print(conn.compute.find_image('CoreOS 1068.9.0'))
-    #
-    # network_stack = DevelopmentNetworkStackSpec().apply(conn)
-    #
-    # print(network_stack.network.id)
-
-    conn.compute.delete_keypair('stuartwiodev')
-
-    key_pair = DevelopmentServerKeyPairSpec().apply(conn)
-
-    # {
-    #     "keypair": {
-    #         "public_key": "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQCtu4JW4X7a8rqqqt379+uLo97Blc4qCT9W82D55wH3IgNEOz1yzF+La6MUAsyq6RD6QNcgOcC4+PIvSZMPvT2BINYava/ViH+v4mnQ44qr91SiBn/g7AnDPYVr6MprY9H9nAyhGNSlvcbK264gQFeJVKYhKlWa9poTtVN7KSoUQhjEMQ8NPb1x56pXyur7Ug2DgMXU7r6n/fhl63dC9IYvlYMUggIB5dPR4FEoVWn77Lp401qjWQpEBc28v7tXwTYrQQowyE9vKx6OmZ+MKbpv5A9t11kxMVXX6AB/oA3m5SfoCP5vcW9E+Z4s36RpmLB7j9zO97yauHgQtiO4zmjB Generated-by-Nova",
-    #         "private_key": "-----BEGIN RSA PRIVATE KEY-----\nMIIEqAIBAAKCAQEArbuCVuF+2vK6qqrd+/fri6PewZXOKgk/VvNg+ecB9yIDRDs9\ncsxfi2ujFALMqukQ+kDXIDnAuPjyL0mTD709gSDWGr2v1Yh/r+Jp0OOKq/dUogZ/\n4OwJwz2Fa+jKa2PR/ZwMoRjUpb3GytuuIEBXiVSmISpVmvaaE7VTeykqFEIYxDEP\nDT29ceeqV8rq+1INg4DF1O6+p/34Zet3QvSGL5WDFIICAeXT0eBRKFVp++y6eNNa\no1kKRAXNvL+7V8E2K0EKMMhPbysejpmfjCm6b+QPbddZMTFV1+gAf6AN5uUn6Aj+\nb3FvRPmeLN+kaZiwe4/czve8mrh4ELYjuM5owQIDAQABAoIBAGoNWqU6hbuWDIj+\nQP/8+VaGtAYsMmvKtVWYwAwNDlAT/TZ7iyk2xORQ0n32r4VtPKXnSusrFhBUN1LS\ncOlctdzLdKdiP6Hz7y4o4jtXi2EqXAmEOi/NJrB+L6INuvMPPjK4PaVhiP2b+Wv/\n6i1Z2ZXFjJwWQaeU/b0mJU27dSpjorIHwEIBabGEnKdkVWt6f/AeHd/S1OU3oKL8\nUOjMlcyPLf1PivZ/TBBGXZbA8lW2AAmfXCeBoUabEE3G8WOWCUTNe50AZqS2lnrl\nVa4mMDQMMLt0vRwNg+H0CCSk/ednXBze23p/eR+1oYK1CsPVZp9eS4nN+d4kmIFN\nq8emLiECggCBALby8ZexqNRzfD7Z1reyB+ULkY72mVhhqOoiPRM3IjiL9q4Nnp3Y\n2f8Rg4FZTFVMAfGoGVF1u5+MrmAwH5XCZuB4H6nXG1K+GZG6/Xqwp/UDKJm1Tq17\nqZrBeVg3xpuFH6tfg6GBUl1tZRUnawTQAVNs5FhhTrpMeu7HEs1JM9y9AoIAgQDz\nGnM4Rw5AKxvKBMM3hg4z6zgcvDWavx3/0wA1qKcELwLIGQNpCUEN//3qNDn5rdQy\niu4JL3jVvrlNRGXlMWDBAZp4GbX5PeqVyd8tN8gr0hctvydjj66puVo0lOmEhu3Q\n+To5Jp5pu1R8X+iqwRkOa8Uoql1WB6fvdJMQeSN2VQKCAIBBVJIXVHbwnujQXOQD\nJw0Qqsfo4IC0AfPa4C0lLnwG61xEnVJ2FZkLL8rhJu1OTF0pWZjo8Pz2JbujV6v/\nw7MPF3ZfJRR5wK7KzpZz+J+Rq/YUpZ0Z8F4JiGt3qDtBEBHWFb6grtilykndev0J\nc+n1S55jPSRq/KKtn+ND8Y8WlQKCAIEAuABZHUuK2b7HNc0NBUWOEnYC7pz15b6q\nMiu+iN6yK1R5woJMNoAuoS4VPeNxzi1n4ymMqZ8o0n+dOYJ/rU4GcY+JH0Y2mgPn\nPqChL1R9Sc2mhZWddpoWFZiZUhsz9H88GWPKUd+NH3IOrGTbcgLduDCR9gmcw7Tf\nwzp05Y8K7FECggCAUhFNTLGmQeSsERolyf0AHexWYGHUMOSJq2VORWhH4tXUONIx\ndrnnM9CJdCPE47UmIpWHkRkrd7WrViv4dMsMpMgvzb4+RcGlEk418ebXa/lnOI2z\nnbYnVSCpYzZHzMFwULmdLVLTmVgTFkPOLZ7LRq3jve9Or6gb7SXQUmfrjxY=\n-----END RSA PRIVATE KEY-----\n",
-    #         "user_id": "62b3d579fb134b428a3fc1b3453219f5",
-    #         "name": "testkeypair",
-    #         "fingerprint": "28:86:fe:48:a0:c0:13:6e:8b:e0:b4:e7:45:e1:a0:a5"
-    #     }
-    # }
-
+    server_stack = DevelopmentServerStackSpec().apply(conn)
+    print(server_stack)
 
 if __name__ == '__main__':
     main()
