@@ -4,11 +4,11 @@ TODO...
 
 ## Contents
 
-- [Setup][#setup]
-- [Testing][#testing]
-- [Deployment][#deployment]
-- [Sharing][#sharing]
-- [Contributing][#contributing
+- [Setup](#setup)
+- [Testing](#testing)
+- [Deployment](#deployment)
+- [Sharing](#sharing)
+- [Contributing](#contributing)
 
 ## Setup
 
