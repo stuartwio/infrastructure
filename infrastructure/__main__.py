@@ -4,11 +4,18 @@ import os.path
 import logging
 import sys
 import json
+import time
 
 DEFAULT_CONFIG_PATH = '~/.config/stuartw.io/infrastructure/config.yaml'
 
 
-class ResourceSpec(object):
+class Spec(object):
+
+    def apply(self, conn):
+        raise NotImplementedError("fetch not implemented")
+
+
+class ResourceSpec(Spec):
 
     _logger = logging.getLogger(__name__)
 
@@ -47,6 +54,46 @@ class ExternalNetworkSpec(ResourceSpec):
 
     def fetch(self, conn):
         return first(conn.network.networks(name='ext-net'))
+
+
+class ObjectStoreContainerResourceSpec(ResourceSpec):
+
+    def name(self):
+        raise NotImplementedError('name not implemented')
+
+    def fetch(self, conn):
+        return first(container for container in conn.object_store.containers() if container.name == self.name())
+
+    def create(self, conn):
+        return conn.object_store.create_container(name=self.name())
+
+
+class GitBackupsContainerSpec(ObjectStoreContainerResourceSpec):
+
+    def name(self):
+        return 'git-backups'
+
+
+class SvnBackupsContainerSpec(ObjectStoreContainerResourceSpec):
+
+    def name(self):
+        return 'svn-backups'
+
+
+class ContainerStackSpec(Spec):
+
+    def apply(self, conn):
+        return ContainerStackResource(
+            git_backups_container=GitBackupsContainerSpec().apply(conn),
+            svn_backups_container=SvnBackupsContainerSpec().apply(conn)
+        )
+
+
+class ContainerStackResource(Resource):
+
+    def __init__(self, git_backups_container, svn_backups_container):
+        self.git_backups_container = git_backups_container
+        self.svn_backups_container = svn_backups_container
 
 
 class DevelopmentNetworkSpec(ResourceSpec):
@@ -120,14 +167,14 @@ class DevelopmentRouterSpec(ResourceSpec):
         )
 
 
-class DevelopmentNetworkStackSpec(ResourceSpec):
+class DevelopmentNetworkStackSpec(Spec):
 
     def __init__(self):
         self._network_spec = DevelopmentNetworkSpec()
         self._router_spec = DevelopmentRouterSpec()
         self._subnet_a_spec = DevelopmentSubnetSpec('a')
 
-    def fetch(self, conn):
+    def apply(self, conn):
         return DevelopmentNetworkStackResource(
             network=self._network_spec.apply(conn),
             router=self._router_spec.apply(conn),
@@ -169,11 +216,10 @@ class DevelopmentServerSpec(ResourceSpec):
 
     _name = 'main.dev.stuartw.io'
 
-    def fetch(self, conn):
+    def _fetch(self, conn):
         return conn.compute.find_server(self._name)
 
-    def create(self, conn):
-        # FIXME: This may need to wait for the server to fully initialize
+    def _create(self, conn):
         return conn.compute.create_server(
             name=self._name,
             key_name=DevelopmentServerKeyPairSpec().name,
@@ -185,6 +231,17 @@ class DevelopmentServerSpec(ResourceSpec):
                 )
             ]
         )
+
+    def _await_if_initializing(self, conn, server):
+        if server and server.status == 'INITIALIZED':
+            return await(lambda: self._fetch(conn), lambda server: server.status == 'ACTIVE', 5, 10)
+        return server
+
+    def fetch(self, conn):
+        return self._await_if_initializing(conn, self._fetch(conn))
+
+    def create(self, conn):
+        return self._await_if_initializing(conn, self._create(conn))
 
 
 class DevelopmentServerFloatingIpSpec(ResourceSpec):
@@ -204,7 +261,7 @@ class DevelopmentServerFloatingIpSpec(ResourceSpec):
         )
 
 
-class DevelopmentServerStackSpec(ResourceSpec):
+class DevelopmentServerStackSpec(Spec):
 
     def __init__(self):
         self._network_stack_spec = DevelopmentNetworkStackSpec()
@@ -212,7 +269,7 @@ class DevelopmentServerStackSpec(ResourceSpec):
         self._server_spec = DevelopmentServerSpec()
         self._floating_ip_spec = DevelopmentServerFloatingIpSpec()
 
-    def fetch(self, conn):
+    def apply(self, conn):
         return DevelopmentServerStackResource(
             network_stack=self._network_stack_spec.apply(conn),
             key_pair=self._key_pair_spec.apply(conn),
@@ -235,6 +292,18 @@ def readconfig():
         return yaml.load(f.read())
 
 
+def await(func, predicate, retries, interval):
+    while True:
+        if retries >= 0:
+            raise TimeoutError('retries exhausted')
+        result = func()
+        if predicate(result):
+            break
+        time.sleep(interval)
+        retries -= 1
+    return result
+
+
 def main():
 
     logger = logging.getLogger()
@@ -244,6 +313,9 @@ def main():
 
     config = readconfig()
     conn = connection.from_config(config['citycloud']['cloud_name'])
+
+    container_stack = ContainerStackSpec().apply(conn)
+    print(container_stack)
 
     server_stack = DevelopmentServerStackSpec().apply(conn)
     print(server_stack)
