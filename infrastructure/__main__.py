@@ -1,46 +1,13 @@
 from openstack import connection, exceptions
+import novaclient.client
 import yaml
 import os.path
 import logging
 import sys
-import json
-import time
+from core import Spec, ResourceSpec, Resource
+import base64
 
 DEFAULT_CONFIG_PATH = '~/.config/stuartw.io/infrastructure/config.yaml'
-
-
-class Spec(object):
-
-    def apply(self, conn):
-        raise NotImplementedError("fetch not implemented")
-
-
-class ResourceSpec(Spec):
-
-    _logger = logging.getLogger(__name__)
-
-    def apply(self, conn):
-        self._logger.info("Checking if {} resource exist...".format(self.__class__.__name__))
-        resource = self.fetch(conn)
-        if resource is None:
-            self._logger.info("{} resource does not exist! Creating resource...".format(self.__class__.__name__))
-            resource = self.create(conn)
-            self._logger.info("{} resource created!".format(self.__class__.__name__))
-        else:
-            self._logger.info("{} resource exists!".format(self.__class__.__name__))
-        return resource
-
-    def fetch(self, conn):
-        raise NotImplementedError("fetch not implemented")
-
-    def create(self, conn):
-        raise NotImplementedError("create not implemented")
-
-
-class Resource(object):
-
-    def __repr__(self):
-        return "{}({})".format(self.__class__.__name__, self.__dict__)
 
 
 def first(gen):
@@ -80,20 +47,19 @@ class SvnBackupsContainerSpec(ObjectStoreContainerResourceSpec):
         return 'svn-backups'
 
 
-class ContainerStackSpec(Spec):
+class DevelopmentServerVolumeSpec(ResourceSpec):
 
-    def apply(self, conn):
-        return ContainerStackResource(
-            git_backups_container=GitBackupsContainerSpec().apply(conn),
-            svn_backups_container=SvnBackupsContainerSpec().apply(conn)
+    _name = 'volume.main.dev.stuartw.io'
+
+    def fetch(self, conn):
+        return first(conn.block_store.volumes(name=self._name))
+
+    def create(self, conn):
+        return conn.block_store.create_volume(
+            name=self._name,
+            description='Persistent volume for repositories.',
+            size=50
         )
-
-
-class ContainerStackResource(Resource):
-
-    def __init__(self, git_backups_container, svn_backups_container):
-        self.git_backups_container = git_backups_container
-        self.svn_backups_container = svn_backups_container
 
 
 class DevelopmentNetworkSpec(ResourceSpec):
@@ -167,29 +133,6 @@ class DevelopmentRouterSpec(ResourceSpec):
         )
 
 
-class DevelopmentNetworkStackSpec(Spec):
-
-    def __init__(self):
-        self._network_spec = DevelopmentNetworkSpec()
-        self._router_spec = DevelopmentRouterSpec()
-        self._subnet_a_spec = DevelopmentSubnetSpec('a')
-
-    def apply(self, conn):
-        return DevelopmentNetworkStackResource(
-            network=self._network_spec.apply(conn),
-            router=self._router_spec.apply(conn),
-            subnet_a=self._subnet_a_spec.apply(conn)
-        )
-
-
-class DevelopmentNetworkStackResource(Resource):
-
-    def __init__(self, network, router, subnet_a):
-        self.network = network
-        self.router = router
-        self.subnet_a = subnet_a
-
-
 class DevelopmentServerKeyPairSpec(ResourceSpec):
 
     name = 'stuartwiodev'
@@ -216,32 +159,53 @@ class DevelopmentServerSpec(ResourceSpec):
 
     _name = 'main.dev.stuartw.io'
 
-    def _fetch(self, conn):
-        return conn.compute.find_server(self._name)
-
-    def _create(self, conn):
-        return conn.compute.create_server(
-            name=self._name,
-            key_name=DevelopmentServerKeyPairSpec().name,
-            flavor_id=conn.compute.find_flavor('2C-4GB-50GB').id,
-            image_id=conn.compute.find_image('CoreOS 1068.9.0').id,
-            networks=[
-                dict(
-                    uuid=DevelopmentNetworkStackSpec().apply(conn).network.id
-                )
-            ]
-        )
-
-    def _await_if_initializing(self, conn, server):
-        if server and server.status == 'INITIALIZED':
-            return await(lambda: self._fetch(conn), lambda server: server.status == 'ACTIVE', 5, 10)
-        return server
-
     def fetch(self, conn):
-        return self._await_if_initializing(conn, self._fetch(conn))
+        server = conn.compute.find_server(self._name)
+        return None if server is None else conn.compute.wait_for_server(server)
 
     def create(self, conn):
-        return self._await_if_initializing(conn, self._create(conn))
+        logger = self.getlogger()
+
+        network = DevelopmentNetworkSpec().apply(conn)
+        volume = DevelopmentServerVolumeSpec().apply(conn)
+        flavor = conn.compute.find_flavor('1C-1GB')
+        image = conn.compute.find_image('CoreOS 1068.9.0')
+        keypair = DevelopmentServerKeyPairSpec().name
+
+        with open('cloud-config.yml') as f:
+            userdata = base64.b64encode(f.read().encode()).decode('utf-8')
+
+        logger.info('----- BEGIN USERDATA -----')
+        logger.info(userdata)
+        logger.info('----- END USERDATA -----')
+
+        logger.info('Creating server with flavor {} and image {}'.format(flavor.name, image.name))
+        server = conn.compute.create_server(
+            name=self._name,
+            key_name=keypair,
+            flavor_id=flavor.id,
+            image_id=image.id,
+            networks=[
+                dict(
+                    uuid=network.id
+                )
+            ],
+            user_data=userdata
+        )
+        logger.info('Building server {}...'.format(server.id))
+        server = conn.compute.wait_for_server(server)
+        logger.info('Server built!')
+
+        logger.info('Attaching volume {} to server {}'.format(volume.id, server.id))
+        client = novaclient.client.Client('2.1', session=conn.session)
+        volume = client.volumes.create_server_volume(server.id, volume.id)
+        logger.info('Volume attached {}'.format(volume.id))
+
+        return server
+
+    @classmethod
+    def getlogger(cls):
+        return logging.getLogger(cls.__name__)
 
 
 class DevelopmentServerFloatingIpSpec(ResourceSpec):
@@ -261,17 +225,56 @@ class DevelopmentServerFloatingIpSpec(ResourceSpec):
         )
 
 
+class StorageStackSpec(Spec):
+
+    def apply(self, conn):
+        return StorageStackResource(
+            git_backups_container=GitBackupsContainerSpec().apply(conn),
+            svn_backups_container=SvnBackupsContainerSpec().apply(conn),
+            development_server_volume=DevelopmentServerVolumeSpec().apply(conn)
+        )
+
+
+class StorageStackResource(Resource):
+
+    def __init__(self, git_backups_container, svn_backups_container, development_server_volume):
+        self.git_backups_container = git_backups_container
+        self.svn_backups_container = svn_backups_container
+        self.development_server_volume = development_server_volume
+
+
+class DevelopmentNetworkStackSpec(Spec):
+
+    def __init__(self):
+        self._network_spec = DevelopmentNetworkSpec()
+        self._router_spec = DevelopmentRouterSpec()
+        self._subnet_a_spec = DevelopmentSubnetSpec('a')
+
+    def apply(self, conn):
+        return DevelopmentNetworkStackResource(
+            network=self._network_spec.apply(conn),
+            router=self._router_spec.apply(conn),
+            subnet_a=self._subnet_a_spec.apply(conn)
+        )
+
+
+class DevelopmentNetworkStackResource(Resource):
+
+    def __init__(self, network, router, subnet_a):
+        self.network = network
+        self.router = router
+        self.subnet_a = subnet_a
+
+
 class DevelopmentServerStackSpec(Spec):
 
     def __init__(self):
-        self._network_stack_spec = DevelopmentNetworkStackSpec()
         self._key_pair_spec = DevelopmentServerKeyPairSpec()
         self._server_spec = DevelopmentServerSpec()
         self._floating_ip_spec = DevelopmentServerFloatingIpSpec()
 
     def apply(self, conn):
         return DevelopmentServerStackResource(
-            network_stack=self._network_stack_spec.apply(conn),
             key_pair=self._key_pair_spec.apply(conn),
             server=self._server_spec.apply(conn),
             floating_ip=self._floating_ip_spec.apply(conn)
@@ -280,8 +283,7 @@ class DevelopmentServerStackSpec(Spec):
 
 class DevelopmentServerStackResource(Resource):
 
-    def __init__(self, network_stack, key_pair, server, floating_ip):
-        self.network_stack = network_stack
+    def __init__(self, key_pair, server, floating_ip):
         self.key_pair = key_pair
         self.server = server
         self.floating_ip = floating_ip
@@ -292,33 +294,32 @@ def readconfig():
         return yaml.load(f.read())
 
 
-def await(func, predicate, retries, interval):
-    while True:
-        if retries >= 0:
-            raise TimeoutError('retries exhausted')
-        result = func()
-        if predicate(result):
-            break
-        time.sleep(interval)
-        retries -= 1
-    return result
-
-
 def main():
 
     logger = logging.getLogger()
     handler = logging.StreamHandler(sys.stdout)
+    formatter = logging.Formatter('%(asctime)-15s - %(levelname)s - %(name)s - %(message)s')
+    handler.setFormatter(formatter)
     logger.addHandler(handler)
     logger.setLevel(logging.INFO)
 
     config = readconfig()
-    conn = connection.from_config(config['citycloud']['cloud_name'])
+    cloud = config['os_cloud']
 
-    container_stack = ContainerStackSpec().apply(conn)
-    print(container_stack)
+    logger.info('Connecting to cloud {}'.format(cloud))
+    conn = connection.from_config(cloud)
 
-    server_stack = DevelopmentServerStackSpec().apply(conn)
-    print(server_stack)
+    logger.info('Verifying storage stack...')
+    storage_stack = StorageStackSpec().apply(conn)
+    logger.info('Storage stack {}'.format(storage_stack))
+
+    logger.info('Verifying development network stack...')
+    development_network_stack = DevelopmentNetworkStackSpec().apply(conn)
+    logger.info('Development network stack {}'.format(development_network_stack))
+
+    logger.info('Verifying development server stack...')
+    development_server_stack = DevelopmentServerStackSpec().apply(conn)
+    logger.info('Development server stack {}'.format(development_server_stack))
 
 if __name__ == '__main__':
     main()

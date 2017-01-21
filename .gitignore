@@ -1,4 +1,7 @@
 .vagrant/
 .venv/
+__pycache__/
+data/
 *.pem
 *.pub
+*.pyc
