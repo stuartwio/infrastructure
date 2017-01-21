@@ -3,7 +3,6 @@ import yaml
 import os.path
 import logging
 import sys
-import json
 import time
 
 DEFAULT_CONFIG_PATH = '~/.config/stuartw.io/infrastructure/config.yaml'
@@ -50,9 +49,9 @@ def first(gen):
         return None
 
 
-class ExternalNetworkSpec(ResourceSpec):
+class ExternalNetworkSpec(Spec):
 
-    def fetch(self, conn):
+    def apply(self, conn):
         return first(conn.network.networks(name='ext-net'))
 
 
@@ -80,20 +79,37 @@ class SvnBackupsContainerSpec(ObjectStoreContainerResourceSpec):
         return 'svn-backups'
 
 
-class ContainerStackSpec(Spec):
+class DevelopmentServerVolumeSpec(ResourceSpec):
+
+    _name = 'volume.main.dev.stuartw.io'
+
+    def fetch(self, conn):
+        return first(conn.block_store.volumes(name=self._name))
+
+    def create(self, conn):
+        return conn.block_store.create_volume(
+            name=self._name,
+            description='Persistent volume for repositories.',
+            size=50
+        )
+
+
+class StorageStackSpec(Spec):
 
     def apply(self, conn):
         return ContainerStackResource(
             git_backups_container=GitBackupsContainerSpec().apply(conn),
-            svn_backups_container=SvnBackupsContainerSpec().apply(conn)
+            svn_backups_container=SvnBackupsContainerSpec().apply(conn),
+            development_server_volume=DevelopmentServerVolumeSpec().apply(conn)
         )
 
 
 class ContainerStackResource(Resource):
 
-    def __init__(self, git_backups_container, svn_backups_container):
+    def __init__(self, git_backups_container, svn_backups_container, development_server_volume):
         self.git_backups_container = git_backups_container
         self.svn_backups_container = svn_backups_container
+        self.development_server_volume = development_server_volume
 
 
 class DevelopmentNetworkSpec(ResourceSpec):
@@ -216,32 +232,38 @@ class DevelopmentServerSpec(ResourceSpec):
 
     _name = 'main.dev.stuartw.io'
 
-    def _fetch(self, conn):
-        return conn.compute.find_server(self._name)
+    def fetch(self, conn):
+        server = conn.compute.find_server(self._name)
+        return None if server is None else conn.compute.wait_for_server(server)
 
-    def _create(self, conn):
-        return conn.compute.create_server(
+    def create(self, conn):
+        network = DevelopmentNetworkStackSpec().apply(conn).network
+        volume = StorageStackSpec().apply(conn).development_server_volume
+        flavor = conn.compute.find_flavor('2C-4GB-50GB')
+        image = conn.compute.find_image('CoreOS 1068.9.0')
+        server = conn.compute.create_server(
             name=self._name,
             key_name=DevelopmentServerKeyPairSpec().name,
-            flavor_id=conn.compute.find_flavor('2C-4GB-50GB').id,
-            image_id=conn.compute.find_image('CoreOS 1068.9.0').id,
+            flavor_id=flavor.id,
+            image_id=image.id,
             networks=[
                 dict(
-                    uuid=DevelopmentNetworkStackSpec().apply(conn).network.id
+                    uuid=network.id
+                )
+            ],
+            block_device_mapping=[
+                dict(
+                    source_type="image",
+                    uuid=image.id,
+                    boot_index=0
+                ),
+                dict(
+                    source_type="volume",
+                    uuid=volume.id
                 )
             ]
         )
-
-    def _await_if_initializing(self, conn, server):
-        if server and server.status == 'INITIALIZED':
-            return await(lambda: self._fetch(conn), lambda server: server.status == 'ACTIVE', 5, 10)
-        return server
-
-    def fetch(self, conn):
-        return self._await_if_initializing(conn, self._fetch(conn))
-
-    def create(self, conn):
-        return self._await_if_initializing(conn, self._create(conn))
+        return conn.compute.wait_for_server(server)
 
 
 class DevelopmentServerFloatingIpSpec(ResourceSpec):
@@ -292,29 +314,19 @@ def readconfig():
         return yaml.load(f.read())
 
 
-def await(func, predicate, retries, interval):
-    while True:
-        if retries >= 0:
-            raise TimeoutError('retries exhausted')
-        result = func()
-        if predicate(result):
-            break
-        time.sleep(interval)
-        retries -= 1
-    return result
-
-
 def main():
 
     logger = logging.getLogger()
     handler = logging.StreamHandler(sys.stdout)
+    formatter = logging.Formatter('%(asctime)-15s - %(levelname)s - %(name)s - %(message)s')
+    handler.setFormatter(formatter)
     logger.addHandler(handler)
     logger.setLevel(logging.INFO)
 
     config = readconfig()
     conn = connection.from_config(config['citycloud']['cloud_name'])
 
-    container_stack = ContainerStackSpec().apply(conn)
+    container_stack = StorageStackSpec().apply(conn)
     print(container_stack)
 
     server_stack = DevelopmentServerStackSpec().apply(conn)

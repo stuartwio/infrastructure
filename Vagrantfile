@@ -1,3 +1,5 @@
+VOLUME_PATH="data/vdb.vdi"
+
 Vagrant.configure(2) do |config|
 
   release = "alpha"
@@ -13,13 +15,39 @@ Vagrant.configure(2) do |config|
   config.vm.network "private_network", ip: "192.168.33.10"
 
   config.vm.provider "virtualbox" do |vb|
-    vb.memory = "512"
-    vb.cpus = "2"
+
+    vb.name = "main.dev.stuartw.io"
+
+    vb.memory = 4096
+
+    vb.cpus = 2
+
     vb.check_guest_additions = false
+
+    unless File.exist?(VOLUME_PATH)
+      vb.customize [
+        'createhd',
+        '--filename', VOLUME_PATH,
+        '--format', 'VDI',
+        '--size', 60 * 1024]
+    end
+
+    vb.customize [
+      'storageattach', :id,
+      '--storagectl', 'IDE Controller',
+      '--port', 1,
+      '--device', 0,
+      '--type', 'hdd',
+      '--medium', VOLUME_PATH]
+
   end
 
   if Vagrant.has_plugin?("vagrant-vbguest") then
+
     config.vbguest.auto_update = false
+
   end
+
+  config.vm.provision :shell, path: "boot.sh"
 
 end
