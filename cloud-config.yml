@@ -108,9 +108,10 @@ coreos:
           --memory 768m \
           --memory-swap 1024m \
           --cpu-shares 1024 \
+          --net host \
           --name jenkins \
-          --env "JAVA_OPTS=-Xmx512m -XX:MaxMetaspaceSize=128m" \
-          jenkins:alpine
+          --env "JAVA_OPTS=-Dhudson.DNSMultiCast.disabled=true -Xmx512m -XX:MaxMetaspaceSize=128m" \
+          jenkins
 
     - name: docker-jenkins.service
       command: start
