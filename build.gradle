@@ -1,0 +1,33 @@
+apply plugin: 'idea'
+apply plugin: 'groovy'
+
+repositories {
+    jcenter()
+    maven {
+        url 'http://repo.jenkins-ci.org/public/'
+    }
+    mavenLocal()
+}
+
+sourceSets {
+    dockerJenkins {
+        groovy {
+            srcDirs = ['docker-jenkins/init.groovy.d']
+        }
+        compileClasspath = sourceSets.main.compileClasspath
+        runtimeClasspath = sourceSets.main.runtimeClasspath
+    }
+}
+
+dependencies {
+    compile 'org.codehaus.groovy:groovy-all:2.4.7'
+    compile 'org.jenkins-ci.plugins:job-dsl-core:1.47'
+    compile 'javax.servlet:javax.servlet-api:4.0.0-b01'
+    compile 'org.jenkins-ci.main:jenkins-core:2.42'
+    compile 'org.jenkins-ci.plugins:credentials:2.1.11@jar'
+    compile 'org.jenkins-ci.plugins:ssh-credentials:1.12@jar'
+    compile 'org.jenkins-ci.plugins.workflow:workflow-job:2.9@jar'
+    compile 'org.jenkins-ci.plugins.workflow:workflow-cps:2.24@jar'
+    compile 'org.jenkins-ci.plugins.workflow:workflow-api:2.8@jar'
+    compile 'org.jenkins-ci.plugins:git:3.0.3@jar'
+}

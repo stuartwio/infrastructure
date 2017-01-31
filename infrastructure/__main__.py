@@ -1,13 +1,20 @@
-from openstack import connection, exceptions
-import novaclient.client
+from openstack import connection
+import heatclient.client
 import yaml
 import os.path
+import os
 import logging
 import sys
-from core import Spec, ResourceSpec, Resource
-import base64
+import difflib
+import openstack.resource2
 
 DEFAULT_CONFIG_PATH = '~/.config/stuartw.io/infrastructure/config.yaml'
+
+
+class Spec(object):
+
+    def apply(self, conn):
+        raise NotImplementedError("fetch not implemented")
 
 
 def first(gen):
@@ -17,276 +24,157 @@ def first(gen):
         return None
 
 
-class ExternalNetworkSpec(ResourceSpec):
-
-    def fetch(self, conn):
-        return first(conn.network.networks(name='ext-net'))
-
-
-class ObjectStoreContainerResourceSpec(ResourceSpec):
-
-    def name(self):
-        raise NotImplementedError('name not implemented')
-
-    def fetch(self, conn):
-        return first(container for container in conn.object_store.containers() if container.name == self.name())
-
-    def create(self, conn):
-        return conn.object_store.create_container(name=self.name())
+def _log_create(fn):
+    def wrapper(self, conn, template):
+        self.logger.info('Creating {} stack'.format(self.name))
+        result = fn(self, conn, template)
+        self.logger.info('{} stack created!\n{}'.format(self.name, result))
+        return result
+    return wrapper
 
 
-class GitBackupsContainerSpec(ObjectStoreContainerResourceSpec):
-
-    def name(self):
-        return 'git-backups'
-
-
-class SvnBackupsContainerSpec(ObjectStoreContainerResourceSpec):
-
-    def name(self):
-        return 'svn-backups'
+def _log_get(fn):
+    def wrapper(self, conn):
+        self.logger.info('Fetching {} stack'.format(self.name))
+        result = fn(self, conn)
+        self.logger.info('Fetched {} stack!\n{}'.format(self.name, result))
+        return result
+    return wrapper
 
 
-class DevelopmentServerVolumeSpec(ResourceSpec):
-
-    _name = 'volume.main.dev.stuartw.io'
-
-    def fetch(self, conn):
-        return first(conn.block_store.volumes(name=self._name))
-
-    def create(self, conn):
-        return conn.block_store.create_volume(
-            name=self._name,
-            description='Persistent volume for repositories.',
-            size=50
-        )
+def _get_stack_template(conn, stack):
+    return heatclient.client.Client('1', session=conn.session).stacks.template(stack)
 
 
-class DevelopmentNetworkSpec(ResourceSpec):
+class OrchestrationStack(Spec):
 
-    _name = 'dev.stuartw.io'
+    _default_timeout_mins = 5
 
-    def fetch(self, conn):
-        return first(conn.network.networks(name=self._name))
+    def __init__(self, name, template, **kwargs):
+        self._logger = self._get_logger()
+        self.name = name
+        self.template = template
+        self._kwargs = kwargs
 
-    def create(self, conn):
-        return conn.network.create_network(
-            name=self._name
-        )
+    def parameters(self, conn):
+        raise NotImplementedError("properties not implemented")
 
+    @_log_get
+    def _get(self, conn):
+        return conn.orchestration.find_stack(self.name)
 
-class DevelopmentSubnetSpec(ResourceSpec):
+    @_log_create
+    def _create(self, conn, template):
+        return conn.orchestration.create_stack(
+            name=self.name, template=template, parameters=self.parameters(conn),
+            timeout_mins=self._default_timeout_mins, **self._kwargs)
 
-    # Removing extra subnets as we don't appear to have zones
-    # i.e. privately networked intra-region datacentre locations
-    # in City Cloud. If we start to care more about disaster
-    # recovery, we can do same geography region high-availability.
+    def _read_template(self):
+        with open(self.template) as f:
+            return yaml.load(f.read())
 
-    _cidr = dict(
-        a='10.0.1.0/24'
-    )
+    def apply(self, conn):
+        logger = self._get_logger()
+        logger.info('Checking if {} stack exists...'.format(self.name))
+        stack = self._get(conn)
+        template = self._read_template()
+        if stack is None:
+            logger.info('{} stack does NOT exist, creating it...'.format(self.name))
+            stack = self._create(conn, template)
+            openstack.resource2.wait_for_status(conn.session, stack, 'CREATE_COMPLETE', list(), 2, 150)
+        else:
+            logger.info('{} stack already exists!'.format(self.name))
+            stack_template = _get_stack_template(conn, stack.id)
+            if stack_template == template:
+                logger.info('NO updates required for {}!'.format(self.name))
+            else:
+                logger.info('Updates required for {}!'.format(self.name))
+                difflib.context_diff(template, stack_template)
 
-    _gateway_id = dict(
-        a='10.0.1.1'
-    )
+        return stack
 
-    _name_template = '{}.subnet.dev.stuartw.io'
-
-    def __init__(self, suffix):
-        self._suffix = suffix
-        self._network_spec = DevelopmentNetworkSpec()
-        self._router_spec = DevelopmentRouterSpec()
-
-    def fetch(self, conn):
-        return first(conn.network.subnets(name=self._name_template.format(self._suffix)))
-
-    def create(self, conn):
-        network = self._network_spec.apply(conn)
-        router = self._router_spec.apply(conn)
-        subnet = conn.network.create_subnet(
-            name=self._name_template.format(self._suffix),
-            network_id=network.id,
-            ip_version='4',
-            cidr=self._cidr[self._suffix],
-            gateway_id=self._cidr[self._suffix]
-        )
-        conn.network.add_interface_to_router(router, subnet.id)
-        return subnet
-
-
-class DevelopmentRouterSpec(ResourceSpec):
-
-    _name = 'router.dev.stuartw.io'
-
-    def __init__(self):
-        self._external_network_spec = ExternalNetworkSpec()
-
-    def fetch(self, conn):
-        return first(conn.network.routers(name=self._name))
-
-    def create(self, conn):
-        return conn.network.create_router(
-            name=self._name,
-            external_gateway_info=dict(
-                network_id=self._external_network_spec.apply(conn).id
-            )
-        )
-
-
-class DevelopmentServerKeyPairSpec(ResourceSpec):
-
-    name = 'stuartwiodev'
-
-    def fetch(self, conn):
-        try:
-            return conn.compute.get_keypair(self.name)
-        except exceptions.ResourceNotFound:
-            return None
-
-    def create(self, conn):
-        key_pair = conn.compute.create_keypair(name=self.name)
-
-        with open(os.path.join(os.getcwd(), '{}.pub'.format(self.name)), 'w') as f:
-            f.write(key_pair.public_key)
-
-        with open(os.path.join(os.getcwd(), '{}.pem'.format(self.name)), 'w') as f:
-            f.write(key_pair.private_key)
-
-        return key_pair
-
-
-class DevelopmentServerSpec(ResourceSpec):
-
-    _name = 'main.dev.stuartw.io'
-
-    def fetch(self, conn):
-        server = conn.compute.find_server(self._name)
-        return None if server is None else conn.compute.wait_for_server(server)
-
-    def create(self, conn):
-        logger = self.getlogger()
-
-        network = DevelopmentNetworkSpec().apply(conn)
-        volume = DevelopmentServerVolumeSpec().apply(conn)
-        flavor = conn.compute.find_flavor('1C-1GB')
-        image = conn.compute.find_image('CoreOS 1068.9.0')
-        keypair = DevelopmentServerKeyPairSpec().name
-
-        with open('cloud-config.yml') as f:
-            userdata = base64.b64encode(f.read().encode()).decode('utf-8')
-
-        logger.info('----- BEGIN USERDATA -----')
-        logger.info(userdata)
-        logger.info('----- END USERDATA -----')
-
-        logger.info('Creating server with flavor {} and image {}'.format(flavor.name, image.name))
-        server = conn.compute.create_server(
-            name=self._name,
-            key_name=keypair,
-            flavor_id=flavor.id,
-            image_id=image.id,
-            networks=[
-                dict(
-                    uuid=network.id
-                )
-            ],
-            user_data=userdata
-        )
-        logger.info('Building server {}...'.format(server.id))
-        server = conn.compute.wait_for_server(server)
-        logger.info('Server built!')
-
-        logger.info('Attaching volume {} to server {}'.format(volume.id, server.id))
-        client = novaclient.client.Client('2.1', session=conn.session)
-        volume = client.volumes.create_server_volume(server.id, volume.id)
-        logger.info('Volume attached {}'.format(volume.id))
-
-        return server
+    @property
+    def logger(self):
+        return self._get_logger()
 
     @classmethod
-    def getlogger(cls):
-        return logging.getLogger(cls.__name__)
+    def _get_logger(cls):
+        return logging.getLogger('{}.{}'.format(cls.__module__, cls.__name__))
 
 
-class DevelopmentServerFloatingIpSpec(ResourceSpec):
-
-    def fetch(self, conn):
-        server = DevelopmentServerSpec().apply(conn)
-        port = first(conn.network.ports(device_id=server.id))
-        ip = conn.network.ips(port_id=port.id)
-        return first(ip)
-
-    def create(self, conn):
-        server = DevelopmentServerSpec().apply(conn)
-        port = first(conn.network.ports(device_id=server.id))
-        return conn.network.create_ip(
-            port_id=port.id,
-            floating_network_id=ExternalNetworkSpec().apply(conn).id
-        )
-
-
-class StorageStackSpec(Spec):
-
-    def apply(self, conn):
-        return StorageStackResource(
-            git_backups_container=GitBackupsContainerSpec().apply(conn),
-            svn_backups_container=SvnBackupsContainerSpec().apply(conn),
-            development_server_volume=DevelopmentServerVolumeSpec().apply(conn)
-        )
-
-
-class StorageStackResource(Resource):
-
-    def __init__(self, git_backups_container, svn_backups_container, development_server_volume):
-        self.git_backups_container = git_backups_container
-        self.svn_backups_container = svn_backups_container
-        self.development_server_volume = development_server_volume
-
-
-class DevelopmentNetworkStackSpec(Spec):
+class ResourcesStack(OrchestrationStack):
 
     def __init__(self):
-        self._network_spec = DevelopmentNetworkSpec()
-        self._router_spec = DevelopmentRouterSpec()
-        self._subnet_a_spec = DevelopmentSubnetSpec('a')
+        super().__init__('seed-resources', 'stacks/resources.yaml')
 
-    def apply(self, conn):
-        return DevelopmentNetworkStackResource(
-            network=self._network_spec.apply(conn),
-            router=self._router_spec.apply(conn),
-            subnet_a=self._subnet_a_spec.apply(conn)
+    def parameters(self, conn):
+        return dict()
+
+
+class NetworkStack(OrchestrationStack):
+
+    def __init__(self, external_network):
+        super().__init__('seed-network', 'stacks/network.yaml')
+        self.external_network = external_network
+
+    def parameters(self, conn):
+        return dict(
+            external_network=self.external_network.id
         )
 
 
-class DevelopmentNetworkStackResource(Resource):
-
-    def __init__(self, network, router, subnet_a):
-        self.network = network
-        self.router = router
-        self.subnet_a = subnet_a
+def get_output_value(outputs, key):
+    return first(output['output_value'] for output in outputs if output['output_key'] == key)
 
 
-class DevelopmentServerStackSpec(Spec):
+class Keypair(Spec):
 
-    def __init__(self):
-        self._key_pair_spec = DevelopmentServerKeyPairSpec()
-        self._server_spec = DevelopmentServerSpec()
-        self._floating_ip_spec = DevelopmentServerFloatingIpSpec()
+    def __init__(self, name):
+        self.name = name
 
     def apply(self, conn):
-        return DevelopmentServerStackResource(
-            key_pair=self._key_pair_spec.apply(conn),
-            server=self._server_spec.apply(conn),
-            floating_ip=self._floating_ip_spec.apply(conn)
+        keypair = conn.compute.find_keypair(self.name)
+        if keypair is None:
+            keypair = conn.compute.create_keypair(name=self.name)
+
+            private_key_path = '{}.pem'.format(self.name)
+            public_key_path = '{}.pub'.format(self.name)
+
+            with open(private_key_path, 'w') as private_key_file:
+                private_key_file.write(keypair.private_key)
+                os.chmod(private_key_path, 0o600)
+
+            with open(public_key_path, 'w') as public_key_file:
+                public_key_file.write(keypair.public_key)
+                os.chmod(public_key_path, 0o644)
+
+        return keypair
+
+
+class DeploymentStack(OrchestrationStack):
+
+    def __init__(self, resource_stack, network_stack, keypair):
+        super().__init__('seed-deployment', 'stacks/deployment.yaml')
+        self.resource_stack = resource_stack
+        self.network_stack = network_stack
+        self.keypair = keypair
+
+    def parameters(self, conn):
+
+        volume = get_output_value(self.resource_stack.outputs, 'seed_volume')
+        network = get_output_value(self.network_stack.outputs, 'seed_network')
+        ip = get_output_value(self.network_stack.outputs, 'seed_ip')
+
+        with open('cloud-config.yml', 'r') as f:
+            user_data = f.read()
+
+        return dict(
+            seed_keypair=self.keypair.name,
+            seed_volume=volume,
+            seed_network=network,
+            seed_ip=ip,
+            seed_user_data=user_data
         )
-
-
-class DevelopmentServerStackResource(Resource):
-
-    def __init__(self, key_pair, server, floating_ip):
-        self.key_pair = key_pair
-        self.server = server
-        self.floating_ip = floating_ip
 
 
 def readconfig():
@@ -294,14 +182,63 @@ def readconfig():
         return yaml.load(f.read())
 
 
+def clean(conn):
+
+    logger = logging.getLogger(__name__)
+
+    logger.info('Deleting {} stack...'.format('seed-deployment'))
+    conn.orchestration.delete_stack('seed-deployment')
+    try:
+        openstack.resource2.wait_for_delete(conn.session, conn.orchestration.get_stack('seed-deployment'), 2, 150)
+    except Exception as ex:
+        logger.warning(ex)
+    logger.info('{} stack deleted!'.format('seed-deployment'))
+
+    logger.info('Deleting {} stack'.format('seed-network'))
+    conn.orchestration.delete_stack('seed-network')
+    try:
+        openstack.resource2.wait_for_delete(conn.session, conn.orchestration.get_stack('seed-network'), 2, 150)
+    except Exception as ex:
+        logger.warning(ex)
+    logger.info('{} stack deleted!'.format('seed-network'))
+
+    logger.info('Deleting {} stack'.format('seed-resources'))
+    conn.orchestration.delete_stack('seed-resources')
+    try:
+        openstack.resource2.wait_for_delete(conn.session, conn.orchestration.get_stack('seed-resources'), 2, 150)
+    except Exception as ex:
+        logger.warning(ex)
+    logger.info('{} stack deleted!'.format('seed-resources'))
+
+
+def deploy(conn):
+
+    external_network = first(conn.network.networks(name='ext-net'))
+    print(external_network)
+
+    resource_stack = ResourcesStack().apply(conn)
+    print(resource_stack)
+
+    network_stack = NetworkStack(external_network).apply(conn)
+    print(network_stack)
+
+    keypair = Keypair('seed').apply(conn)
+    print(keypair)
+
+    deployment_stack = DeploymentStack(resource_stack, network_stack, keypair).apply(conn)
+    print(deployment_stack)
+
+
 def main():
 
-    logger = logging.getLogger()
+    root_logger = logging.getLogger()
     handler = logging.StreamHandler(sys.stdout)
     formatter = logging.Formatter('%(asctime)-15s - %(levelname)s - %(name)s - %(message)s')
     handler.setFormatter(formatter)
-    logger.addHandler(handler)
-    logger.setLevel(logging.INFO)
+    root_logger.addHandler(handler)
+    root_logger.setLevel(logging.INFO)
+
+    logger = logging.getLogger(__name__)
 
     config = readconfig()
     cloud = config['os_cloud']
@@ -309,17 +246,9 @@ def main():
     logger.info('Connecting to cloud {}'.format(cloud))
     conn = connection.from_config(cloud)
 
-    logger.info('Verifying storage stack...')
-    storage_stack = StorageStackSpec().apply(conn)
-    logger.info('Storage stack {}'.format(storage_stack))
+    # clean(conn)
+    deploy(conn)
 
-    logger.info('Verifying development network stack...')
-    development_network_stack = DevelopmentNetworkStackSpec().apply(conn)
-    logger.info('Development network stack {}'.format(development_network_stack))
-
-    logger.info('Verifying development server stack...')
-    development_server_stack = DevelopmentServerStackSpec().apply(conn)
-    logger.info('Development server stack {}'.format(development_server_stack))
 
 if __name__ == '__main__':
     main()

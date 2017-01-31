@@ -1,5 +1,134 @@
 #cloud-config
 
+write_files:
+
+- path: /var/lib/docker-jenkins/plugins.txt
+  content: |
+    blueocean:latest
+    git:latest
+    job-dsl:latest
+    workflow-aggregator:latest
+
+- path: /var/lib/docker-jenkins/init.groovy.d/admin.groovy
+  content: |
+    import hudson.security.FullControlOnceLoggedInAuthorizationStrategy
+    import hudson.security.HudsonPrivateSecurityRealm
+    import jenkins.model.Jenkins
+    import jenkins.security.s2m.AdminWhitelistRule
+
+    def username = 'admin'
+
+    def password = UUID.randomUUID().toString().replace("-", "").toLowerCase(Locale.ENGLISH)
+
+    println("--------------------------------------------------")
+    println(password)
+    println("--------------------------------------------------")
+
+    def description = 'Administrator'
+
+    def jenkins = Jenkins.instance
+
+    def hudsonRealm = new HudsonPrivateSecurityRealm(false)
+
+    def user = hudsonRealm.createAccount(username, password)
+
+    user.setDescription(description)
+
+    jenkins.setSecurityRealm(hudsonRealm)
+
+    jenkins.save()
+
+    def strategy = new FullControlOnceLoggedInAuthorizationStrategy()
+
+    strategy.allowAnonymousRead = true
+
+    jenkins.setAuthorizationStrategy(strategy)
+
+    def filePath = jenkins.getRootPath().child('secrets/adminPassword')
+
+    filePath.touch(System.currentTimeMillis())
+
+    filePath.chmod(0600)
+
+    jenkins.injector.getInstance(AdminWhitelistRule.class)
+            .setMasterKillSwitch(false)
+
+    jenkins.save()
+
+    def file = new File(filePath.absolutize() as String)
+
+    file << password
+
+- path: /var/lib/docker-jenkins/init.groovy.d/git.groovy
+  content: |
+    import com.cloudbees.jenkins.plugins.sshcredentials.impl.BasicSSHUserPrivateKey
+    import com.cloudbees.plugins.credentials.CredentialsScope
+    import com.cloudbees.plugins.credentials.domains.Domain
+    import com.cloudbees.plugins.credentials.SystemCredentialsProvider
+
+    def scope = CredentialsScope.GLOBAL
+
+    def id = 'jenkins-git'
+
+    def username = 'git'
+
+    def source = new BasicSSHUserPrivateKey.UsersPrivateKeySource()
+
+    def passphrase = null
+
+    def description = 'SSH key for Jenkins access to Git repository.'
+
+    def ssh = new BasicSSHUserPrivateKey(
+            scope, id, username, source, passphrase,
+            description)
+
+    def provider = SystemCredentialsProvider.instance
+
+    provider.store.addCredentials(Domain.global(), ssh)
+
+- path: /var/lib/docker-jenkins/init.groovy.d/seed.groovy
+  content: |
+    import hudson.plugins.git.BranchSpec
+    import hudson.plugins.git.GitSCM
+    import hudson.plugins.git.UserRemoteConfig
+    import hudson.triggers.SCMTrigger
+    import jenkins.model.Jenkins
+    import org.jenkinsci.plugins.workflow.cps.CpsScmFlowDefinition
+    import org.jenkinsci.plugins.workflow.job.WorkflowJob
+
+    def job = Jenkins.instance.createProject(WorkflowJob, 'seed')
+
+    job.addTrigger(new SCMTrigger('H/2 * * * *'))
+
+    def remote = new UserRemoteConfig('git@localhost:seed.git', null, null, 'jenkins-git')
+
+    def scm = new GitSCM(
+            Collections.singletonList(remote),
+            Collections.singletonList(new BranchSpec("*/master")),
+            false,
+            Collections.emptyList(),
+            null, null, Collections.emptyList())
+
+    def definition = new CpsScmFlowDefinition(scm, 'Jenkinsfile')
+
+    job.setDefinition(definition)
+
+- path: /var/lib/docker-jenkins/Dockerfile
+  content: |
+    FROM jenkins:alpine
+
+    USER root
+
+    COPY plugins.txt /usr/share/jenkins/plugins.txt
+
+    RUN cat /usr/share/jenkins/plugins.txt | xargs /usr/local/bin/install-plugins.sh
+
+    COPY init.groovy.d /usr/share/jenkins/ref/init.groovy.d
+
+    RUN chown -R jenkins:jenkins /usr/share/jenkins/ref
+
+    USER jenkins
+
 coreos:
 
   units:
@@ -18,14 +147,11 @@ coreos:
         [Service]
         Type=oneshot
         RemainAfterExit=yes
-        ExecStart=/bin/bash -c '( \
-          /usr/bin/lsblk --fs | \
-          grep --silent vdb | \
-          grep --silent ext4 \
-        ) || ( \
-          /usr/sbin/wipefs -f /dev/vdb && \
-          /usr/sbin/mkfs -t ext4 /dev/vdb \
-        )'
+        ExecStart=/usr/bin/bash -xc "\
+          (/usr/bin/lsblk --fs | /usr/bin/grep vdb1 | /usr/bin/grep --silent ext4) || (\
+            /usr/sbin/parted --machine --script /dev/vdb mklabel gpt &&\
+            /usr/sbin/parted --machine --script --align=opt /dev/vdb mkpart primary ext4 0% 100% &&\
+            /usr/sbin/mkfs.ext4 -L VOLUME-A /dev/vdb1)"
 
     # Mounts the attached volume to the file system
     # under /media/volume.
@@ -38,7 +164,7 @@ coreos:
         After=dev-vdb.device
 
         [Mount]
-        What=/dev/vdb
+        What=/dev/vdb1
         Where=/media/volume
         Type=ext4
 
@@ -89,13 +215,123 @@ coreos:
           --shell /sbin/nologin \
           jenkins
 
+    - name: group-git.service
+      command: start
+      content: |
+        [Unit]
+        Description=Create Git group
+        ConditionFirstBoot=true
+
+        [Service]
+        Type=oneshot
+        RemainAfterExit=yes
+        ExecStart=/usr/sbin/groupadd --gid 1001 git
+
+    - name: user-git.service
+      command: start
+      content: |
+        [Unit]
+        Description=Create Git user
+        Requires=media-volume.mount group-git.service
+        After=media-volume.mount group-git.service
+        ConditionFirstBoot=true
+
+        [Service]
+        Type=oneshot
+        RemainAfterExit=yes
+        ExecStart=/usr/sbin/useradd --uid 1001 \
+          --create-home \
+          --home-dir /media/volume/home/git \
+          --gid git \
+          --shell /bin/bash \
+          git
+
+    - name: seed-git-repo.service
+      command: start
+      content: |
+        [Unit]
+        Description=Seed Git Repository
+        Requires=user-git.service
+        After=user-git.service
+        ConditionFirstBoot=true
+        ConditionPathExists=!/media/volume/home/git/seed.git
+
+        [Service]
+        User=git
+        Group=git
+        Type=oneshot
+        RemainAfterExit=yes
+        ExecStart=/usr/bin/git init --bare /media/volume/home/git/seed.git
+
+    - name: ssh-user-jenkins.service
+      command: start
+      content: |
+        [Unit]
+        Description=Creates SSH key for Jenkins
+        Requires=user-jenkins.service
+        After=user-jenkins.service
+        ConditionFirstBoot=true
+        ConditionPathExists=!/media/volume/home/jenkins/.ssh/id_rsa
+
+        [Service]
+        User=jenkins
+        Group=jenkins
+        Type=oneshot
+        RemainAfterExit=yes
+        ExecStart=/usr/bin/ssh-keygen -t rsa -C jenkins.stuartw.io -f /media/volume/home/jenkins/.ssh/id_rsa
+
+    - name: ssh-git-access.service
+      command: start
+      content: |
+        [Unit]
+        Description=Creates authorized SSH keys file for Git access
+        Requires=user-git.service
+        After=user-git.service
+        ConditionFirstBoot=true
+        ConditionPathExists=!/media/volume/home/git/.ssh/authorized_keys
+
+        [Service]
+        User=git
+        Group=git
+        Type=oneshot
+        RemainAfterExit=yes
+        ExecStart=/usr/bin/touch /media/volume/home/git/.ssh/authorized_keys
+
+    - name: ssh-user-jenkins-git-access.service
+      command: start
+      content: |
+        [Unit]
+        Description=Adds Jenkins SSH key to Git access
+        Requires=ssh-git-access.service ssh-user-jenkins.service
+        After=ssh-git-access.service ssh-user-jenkins.service
+        ConditionFirstBoot=true
+
+        [Service]
+        Type=oneshot
+        RemainAfterExit=yes
+        ExecStart=/bin/bash -c '/usr/bin/cat /media/volume/home/jenkins/.ssh/id_rsa.pub >> /media/volume/home/git/.ssh/authorized_keys'
+
+    - name: docker-jenkins-build.service
+      command: start
+      content: |
+        [Unit]
+        Description=Build Jenkins image
+        Requires=docker.service
+        After=docker.service
+        ConditionFirstBoot=true
+
+        [Service]
+        Type=oneshot
+        RemainAfterExit=yes
+        ExecStart=/usr/bin/docker build --tag stuartw.io/jenkins /var/lib/docker-jenkins
+
     - name: docker-jenkins-create.service
       command: start
       content: |
         [Unit]
         Description=Create Jenkins container
-        Requires=user-jenkins.service
-        After=docker.service
+        Requires=docker-jenkins-build.service
+        After=docker-jenkins-build.service
         ConditionFirstBoot=true
 
         [Service]
@@ -111,7 +347,7 @@ coreos:
           --net host \
           --name jenkins \
           --env "JAVA_OPTS=-Dhudson.DNSMultiCast.disabled=true -Xmx512m -XX:MaxMetaspaceSize=128m" \
-          jenkins
+          stuartw.io/jenkins
 
     - name: docker-jenkins.service
       command: start
@@ -121,10 +357,11 @@ coreos:
         After=docker-jenkins-create.service
 
         [Service]
-        Restart=Always
+        Restart=always
         ExecStart=/usr/bin/docker start --attach jenkins
         ExecStop=/usr/bin/docker stop jenkins
 
+  # What does this do?
   oem:
     id: openstack
     name: Openstack

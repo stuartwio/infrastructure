@@ -1,3 +1,5 @@
+build/
+.gradle/
 .vagrant/
 .venv/
 __pycache__/
