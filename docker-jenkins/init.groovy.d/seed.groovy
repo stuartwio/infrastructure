@@ -6,21 +6,25 @@ import jenkins.model.Jenkins
 import org.jenkinsci.plugins.workflow.cps.CpsScmFlowDefinition
 import org.jenkinsci.plugins.workflow.job.WorkflowJob
 
-def job = Jenkins.instance.createProject(WorkflowJob, 'seed')
+def jenkins = Jenkins.instance
+def host = System.properties.getProperty('git.host', 'localhost')
 
-job.addTrigger(new SCMTrigger('H/2 * * * *'))
+if (!jenkins.jobNames.find { jobName -> jobName == "seed" }) {
 
-def remote = new UserRemoteConfig('git@localhost:seed.git', null, null, 'jenkins-git')
+    def job = jenkins.createProject(WorkflowJob, 'seed')
 
-def scm = new GitSCM(
-        Collections.singletonList(remote),
-        Collections.singletonList(new BranchSpec("*/master")),
-        false,
-        Collections.emptyList(),
-        null, null, Collections.emptyList())
+    job.addTrigger(new SCMTrigger('H/2 * * * *'))
 
-def definition = new CpsScmFlowDefinition(scm, 'Jenkinsfile')
+    def remote = new UserRemoteConfig("git@${host}:seed.git", null, null, 'jenkins-git')
 
-job.setDefinition(definition)
+    def scm = new GitSCM(
+            [remote] as List, [new BranchSpec("*/master")],
+            false, [], null, null, [])
 
+    def definition = new CpsScmFlowDefinition(scm, 'Jenkinsfile')
 
+    job.setDefinition(definition)
+
+    jenkins.save()
+
+}

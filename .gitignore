@@ -1,9 +1,11 @@
-build/
 .gradle/
+.seed/
 .vagrant/
 .venv/
+build/
 __pycache__/
 data/
 *.pem
 *.pub
 *.pyc
+*-auth.yaml

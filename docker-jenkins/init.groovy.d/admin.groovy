@@ -3,45 +3,35 @@ import hudson.security.HudsonPrivateSecurityRealm
 import jenkins.model.Jenkins
 import jenkins.security.s2m.AdminWhitelistRule
 
-def username = 'admin'
-
-def password = UUID.randomUUID().toString().replace("-", "").toLowerCase(Locale.ENGLISH)
-
-println("--------------------------------------------------")
-println(password)
-println("--------------------------------------------------")
-
-def description = 'Administrator'
-
 def jenkins = Jenkins.instance
+
+def filePath = jenkins.getRootPath().child('secrets/adminPassword')
+
+def username = 'admin'
+def password = (filePath.exists()) ? filePath.readToString() :
+    UUID.randomUUID().toString().replace("-", "").toLowerCase(Locale.ENGLISH)
+def description = 'Administrator'
 
 def hudsonRealm = new HudsonPrivateSecurityRealm(false)
 
 def user = hudsonRealm.createAccount(username, password)
-
 user.setDescription(description)
 
 jenkins.setSecurityRealm(hudsonRealm)
 
-jenkins.save()
-
 def strategy = new FullControlOnceLoggedInAuthorizationStrategy()
-
-strategy.allowAnonymousRead = true
-
+strategy.allowAnonymousRead = false
 jenkins.setAuthorizationStrategy(strategy)
-
-def filePath = jenkins.getRootPath().child('secrets/adminPassword')
-
-filePath.touch(System.currentTimeMillis())
-
-filePath.chmod(0600)
 
 jenkins.injector.getInstance(AdminWhitelistRule.class)
         .setMasterKillSwitch(false)
 
 jenkins.save()
 
-def file = new File(filePath.absolutize() as String)
-
-file << password
+if (!filePath.exists()) {
+    filePath.touch(System.currentTimeMillis())
+    filePath.chmod(0600)
+    new File(filePath.absolutize() as String).withWriter {
+        it << password
+    }
+}
