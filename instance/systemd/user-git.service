@@ -1,0 +1,15 @@
+[Unit]
+Description=Create Git user
+Requires=media-volume.mount group-git.service
+After=media-volume.mount group-git.service
+ConditionFirstBoot=true
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/sbin/useradd --uid 1001 \
+  --create-home \
+  --home-dir /media/volume/home/git \
+  --gid git \
+  --shell /bin/bash \
+  git

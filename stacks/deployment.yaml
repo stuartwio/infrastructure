@@ -14,20 +14,10 @@ parameters:
     label: Seed network
     description: The seed network into which to deploy.
 
-  seed_ip:
-    type: string
-    label: Seed IP
-    description: The floating IP for the instance.
-
-  seed_volume:
-    type: string
-    label: Seed Volume
-    description: The block storage volume for the instance
-
   seed_user_data:
     type: string
-    label: Seed User Data
-    description: The user data to use to initialise the instance.
+    label: Seed user data
+    description: The user data to user for the instance
 
 resources:
 
@@ -40,7 +30,6 @@ resources:
       image: CoreOS 1068.9.0
       networks:
       - network: { get_param: seed_network }
-        floating_ip: { get_param: seed_ip }
       user_data: { get_param: seed_user_data }
       user_data_format: RAW
       security_groups:
@@ -48,15 +37,8 @@ resources:
       - seed-jenkins-internet
       - seed-ssh
 
-  seed_volume_attachment:
-    type: OS::Cinder::VolumeAttachment
-    properties:
-      instance_uuid: { get_resource: seed_instance }
-      volume_id: { get_param: seed_volume }
-      mountpoint: /dev/vbd
+outputs:
 
-  seed_ip_association:
-    type: OS::Nova::FloatingIPAssociation
-    properties:
-      floating_ip: { get_param: seed_ip }
-      server_id: { get_resource: seed_instance }
+  seed_instance:
+    description: The seed instance.
+    value: { get_resource: seed_instance }

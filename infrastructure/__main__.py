@@ -1,6 +1,7 @@
 from openstack import connection
 import heatclient.client
 import yaml
+import json
 import os.path
 import os
 import logging
@@ -9,6 +10,49 @@ import difflib
 import openstack.resource2
 
 DEFAULT_CONFIG_PATH = '~/.config/stuartw.io/infrastructure/config.yaml'
+
+
+class Stack(object):
+
+    def create(self, connection):
+        raise NotImplementedError()
+
+    def delete(self, connection):
+        raise NotImplementedError()
+
+    def exists(self, connection):
+        raise NotImplementedError()
+
+    def fetch(self, connection):
+        raise NotImplementedError()
+
+    def update(self, connection):
+        raise NotImplementedError()
+
+
+class UpdateInPlaceDeployment(object):
+
+    def __init__(self, stack):
+        self._stack = stack
+
+    def deploy(self, connection):
+        if not self._stack.exists(connection):
+            self._stack.create(connection)
+        else:
+            self._stack.update(connection)
+        return self._stack.fetch(connection)
+
+
+class ReplacementDeployment(Stack):
+
+    def __init__(self, stack):
+        self._stack = stack
+
+    def deploy(self, connection):
+        if self._stack.exists(connection):
+            self._stack.delete(connection)
+        self._stack.create(connection)
+        return self._stack.fetch(connection)
 
 
 class Spec(object):
@@ -102,13 +146,25 @@ class OrchestrationStack(Spec):
         return logging.getLogger('{}.{}'.format(cls.__module__, cls.__name__))
 
 
-class ResourcesStack(OrchestrationStack):
+class StorageStack(OrchestrationStack):
 
     def __init__(self):
-        super().__init__('seed-resources', 'stacks/resources.yaml')
+        super().__init__('seed-storage', 'stacks/storage.yaml')
 
     def parameters(self, conn):
         return dict()
+
+
+class ResourcesStack(OrchestrationStack):
+
+    def __init__(self, external_network):
+        super().__init__('seed-resources', 'stacks/resources.yaml')
+        self.external_network = external_network
+
+    def parameters(self, conn):
+        return dict(
+            external_network=self.external_network.id
+        )
 
 
 class NetworkStack(OrchestrationStack):
@@ -151,29 +207,167 @@ class Keypair(Spec):
         return keypair
 
 
+def get_file_contents(path):
+    with open(path, 'r') as f:
+        return f.read()
+
+
 class DeploymentStack(OrchestrationStack):
 
-    def __init__(self, resource_stack, network_stack, keypair):
+    def __init__(self, network_stack, keypair):
         super().__init__('seed-deployment', 'stacks/deployment.yaml')
-        self.resource_stack = resource_stack
         self.network_stack = network_stack
         self.keypair = keypair
 
+    @_log_create
+    def _create(self, conn, template):
+        data = dict(
+            stack_name=self.name,
+            template=template,
+            parameters=self.parameters(conn),
+            timeout_mins=self._default_timeout_mins
+        )
+        heatclient.client.Client('1', session=conn.session).stacks.create(**data)
+        return conn.orchestration.find_stack(self.name)
+
     def parameters(self, conn):
-
-        volume = get_output_value(self.resource_stack.outputs, 'seed_volume')
         network = get_output_value(self.network_stack.outputs, 'seed_network')
-        ip = get_output_value(self.network_stack.outputs, 'seed_ip')
-
-        with open('cloud-config.yml', 'r') as f:
-            user_data = f.read()
+        cloud_config = "#cloud-config\n{}".format(yaml.dump(dict(
+            write_files=[
+                dict(
+                    path='/var/lib/docker-jenkins/Dockerfile',
+                    content=get_file_contents('docker-jenkins/Dockerfile')
+                ),
+                dict(
+                    path='/var/lib/docker-jenkins/plugins.txt',
+                    content=get_file_contents('docker-jenkins/plugins.txt')
+                ),
+                dict(
+                    path='/var/lib/docker-jenkins/init.groovy.d/seed.groovy',
+                    content=get_file_contents('docker-jenkins/init.groovy.d/seed.groovy')
+                ),
+                dict(
+                    path='/var/lib/docker-jenkins/init.groovy.d/git.groovy',
+                    content=get_file_contents('docker-jenkins/init.groovy.d/git.groovy')
+                ),
+                dict(
+                    path='/var/lib/docker-jenkins/init.groovy.d/admin.groovy',
+                    content=get_file_contents('docker-jenkins/init.groovy.d/admin.groovy')
+                ),
+                dict(
+                    path='/home/core/.config/seed/auth.json',
+                    permissions="0600",
+                    owner="core:core",
+                    content=get_file_contents('.seed/auth.json')
+                ),
+                dict(
+                    path='/home/core/format-volume.sh',
+                    permissions="0700",
+                    owner="core:core",
+                    content=get_file_contents('instance/scripts/format-volume.sh')
+                ),
+                dict(
+                    path='/home/core/restore-seed-git.sh',
+                    permissions="0700",
+                    owner="core:core",
+                    content=get_file_contents('instance/scripts/restore-seed-git.sh')
+                )
+            ],
+            coreos=dict(
+                units=[
+                    dict(
+                        name='format-volume.service',
+                        command='start',
+                        content=get_file_contents('instance/systemd/format-volume.service')
+                    ),
+                    dict(
+                        name='media-volume.mount',
+                        command='start',
+                        content=get_file_contents('instance/systemd/media-volume.mount')
+                    ),
+                    dict(
+                        name='media-volume-home.service',
+                        command='start',
+                        content=get_file_contents('instance/systemd/media-volume-home.service')
+                    ),
+                    dict(
+                        name='group-jenkins.service',
+                        command='start',
+                        content=get_file_contents('instance/systemd/group-jenkins.service')
+                    ),
+                    dict(
+                        name='user-jenkins.service',
+                        command='start',
+                        content=get_file_contents('instance/systemd/user-jenkins.service')
+                    ),
+                    dict(
+                        name='group-git.service',
+                        command='start',
+                        content=get_file_contents('instance/systemd/group-git.service')
+                    ),
+                    dict(
+                        name='user-git.service',
+                        command='start',
+                        content=get_file_contents('instance/systemd/user-git.service')
+                    ),
+                    dict(
+                        name='seed-git-repo.service',
+                        command='start',
+                        content=get_file_contents('instance/systemd/seed-git-repo.service')
+                    ),
+                    dict(
+                        name='ssh-user-jenkins.service',
+                        command='start',
+                        content=get_file_contents('instance/systemd/ssh-user-jenkins.service')
+                    ),
+                    dict(
+                        name='ssh-git-access.service',
+                        command='start',
+                        content=get_file_contents('instance/systemd/ssh-git-access.service')
+                    ),
+                    dict(
+                        name='ssh-user-jenkins-git-access.service',
+                        command='start',
+                        content=get_file_contents('instance/systemd/ssh-user-jenkins-git-access.service')
+                    ),
+                    dict(
+                        name='docker-jenkins-build.service',
+                        command='start',
+                        content=get_file_contents('instance/systemd/docker-jenkins-build.service')
+                    ),
+                    dict(
+                        name='docker-jenkins-create.service',
+                        command='start',
+                        content=get_file_contents('instance/systemd/docker-jenkins-create.service')
+                    ),
+                    dict(
+                        name='docker-jenkins.service',
+                        command='start',
+                        content=get_file_contents('instance/systemd/docker-jenkins.service')
+                    )
+                ]
+            )
+        )))
 
         return dict(
             seed_keypair=self.keypair.name,
-            seed_volume=volume,
             seed_network=network,
-            seed_ip=ip,
-            seed_user_data=user_data
+            seed_user_data=cloud_config
+        )
+
+
+class AttachmentStack(OrchestrationStack):
+
+    def __init__(self, resource_stack, deployment_stack):
+        super().__init__('seed-attachment', 'stacks/attachment.yaml')
+        self.resource_stack = resource_stack
+        self.deployment_stack = deployment_stack
+
+    def parameters(self, conn):
+        return dict(
+            seed_ip=get_output_value(self.resource_stack.outputs, 'seed_ip'),
+            seed_volume=get_output_value(self.resource_stack.outputs, 'seed_volume'),
+            seed_instance=get_output_value(self.deployment_stack.outputs, 'seed_instance')
         )
 
 
@@ -182,52 +376,44 @@ def readconfig():
         return yaml.load(f.read())
 
 
-def clean(conn):
-
+def delete_stack(conn, name):
     logger = logging.getLogger(__name__)
-
-    logger.info('Deleting {} stack...'.format('seed-deployment'))
-    conn.orchestration.delete_stack('seed-deployment')
+    logger.info('Deleting {} stack...'.format(name))
+    conn.orchestration.delete_stack(name)
     try:
-        openstack.resource2.wait_for_delete(conn.session, conn.orchestration.get_stack('seed-deployment'), 2, 150)
+        openstack.resource2.wait_for_delete(
+            conn.session, conn.orchestration.get_stack(name), 2, 150)
     except Exception as ex:
         logger.warning(ex)
-    logger.info('{} stack deleted!'.format('seed-deployment'))
+    logger.info('{} stack deleted!'.format(name))
 
-    logger.info('Deleting {} stack'.format('seed-network'))
-    conn.orchestration.delete_stack('seed-network')
-    try:
-        openstack.resource2.wait_for_delete(conn.session, conn.orchestration.get_stack('seed-network'), 2, 150)
-    except Exception as ex:
-        logger.warning(ex)
-    logger.info('{} stack deleted!'.format('seed-network'))
 
-    logger.info('Deleting {} stack'.format('seed-resources'))
-    conn.orchestration.delete_stack('seed-resources')
-    try:
-        openstack.resource2.wait_for_delete(conn.session, conn.orchestration.get_stack('seed-resources'), 2, 150)
-    except Exception as ex:
-        logger.warning(ex)
-    logger.info('{} stack deleted!'.format('seed-resources'))
+def clean(conn):
+    delete_stack(conn, 'seed-attachment')
+    delete_stack(conn, 'seed-deployment')
+    # delete_stack(conn, 'seed-network')
+    # delete_stack(conn, 'seed-resources')
+    # delete_stack(conn, 'seed-storage')
 
 
 def deploy(conn):
-
     external_network = first(conn.network.networks(name='ext-net'))
-    print(external_network)
-
-    resource_stack = ResourcesStack().apply(conn)
-    print(resource_stack)
-
+    storage_stack = StorageStack().apply(conn)
+    resource_stack = ResourcesStack(external_network).apply(conn)
     network_stack = NetworkStack(external_network).apply(conn)
-    print(network_stack)
-
     keypair = Keypair('seed').apply(conn)
-    print(keypair)
+    deployment_stack = DeploymentStack(network_stack, keypair).apply(conn)
+    attachment_stack = AttachmentStack(resource_stack, deployment_stack).apply(conn)
 
-    deployment_stack = DeploymentStack(resource_stack, network_stack, keypair).apply(conn)
-    print(deployment_stack)
 
+class Opts(object):
+
+    def __init__(self):
+        self.identity_api_version='3'
+
+# TODO: Ensure deployment works correctly
+# TODO: Set up history between two object storage containers
+# TODO: Unit tests
 
 def main():
 
@@ -244,9 +430,59 @@ def main():
     cloud = config['os_cloud']
 
     logger.info('Connecting to cloud {}'.format(cloud))
-    conn = connection.from_config(cloud)
+    conn = connection.from_config(cloud_name=cloud, options=Opts())
 
-    # clean(conn)
+    # token = conn.authorize()
+    # print(token)
+    # print(conn.authorize())
+    # keystone = keystoneclient.v3.client.Client(session=conn.session)
+    # result = keystone.tokens.validate(token)
+    # print(result)
+    #
+    # # Before here list
+    # seed_git_backup_list_url = '{}/{}'.format(conn.session.get_endpoint(service_type='object-store'), 'seed-git-backups')
+    # print(seed_git_backup_list_url)
+    # seed_git_backup_url = '{}/{}'.format(conn.session.get_endpoint(service_type='object-store'), 'seed-git-backups/seed-git-backup-latest.tar.gz')
+
+    # user = conn.identity.create_user(
+    #     description='The seed instance user.',
+    #     default_project_id='44488b6085e6423fbc1e85a1e664a5e4',
+    #     domain_id='44488b6085e6423fbc1e85a1e664a5e4',
+    #     email='seed@stuartw.io',
+    #     name='seed-{}'.format(uuid.uuid4()),
+    #     password=uuid.uuid4()
+    # )
+    # print(user)
+
+    # print(uuid.uuid4())
+    #
+    # credential = conn.identity.create_credential(
+    #     type='ec2',
+    #     blob='{"access":"12345","secret":"98765"}',
+    #     project_id='44488b6085e6423fbc1e85a1e664a5e4'
+    # )
+    # print(credential)
+
+    # Upload
+    # curl -H 'X-Auth-Token: $auth_token' -H 'Content-Type: application/gzip' -X PUT --data-binary @$file_path $endpoint/$container/$name
+
+    # Download
+    # curl -H 'X-Auth-Token: $auth_token' -o $file_path $endpoint/$container/$name
+
+    # List file names
+    # curl -H 'X-Auth-Token: $auth_token' $endpoint/$container
+
+    # List file info
+    # curl -H 'X-Auth-Token: $auth_token' $endpoint/$container?format=json
+
+    # Latest file (given names are lexically sortable)
+    # curl -H 'X-Auth-Token: $auth_token' $endpoint/$container | tail -n 1
+    # curl -H 'X-Auth-Token: $auth_token' $endpoint/$container?format=json | jq '.[-1]'
+
+    # If names cannot be used to determine latest
+    # curl -H 'X-Auth-Token: $auth_token' $endpoint/$container?format=json | jq 'sort_by(.last_modified)[-1]'
+
+    clean(conn)
     deploy(conn)
 
 

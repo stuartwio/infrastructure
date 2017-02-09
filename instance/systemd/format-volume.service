@@ -1,0 +1,10 @@
+[Unit]
+Description=Formats the volume drive
+Requires=dev-vdb.device
+After=dev-vdb.device
+ConditionFirstBoot=true
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/home/core/format-volume.sh

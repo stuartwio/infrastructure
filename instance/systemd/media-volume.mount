@@ -1,0 +1,9 @@
+[Unit]
+Description=Mount volume to /media/volume
+Requires=dev-vdb.device
+After=dev-vdb.device
+
+[Mount]
+What=/dev/vdb1
+Where=/media/volume
+Type=ext4

@@ -1,0 +1,10 @@
+[Unit]
+Description=Create /media/volume/home directory
+Requires=media-volume.mount
+After=media-volume.mount
+ConditionFirstBoot=true
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/bin/mkdir --parents /media/volume/home

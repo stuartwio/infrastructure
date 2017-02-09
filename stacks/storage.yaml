@@ -2,14 +2,19 @@ heat_template_version: "2015-04-30"
 
 description: Resources stack.
 
-parameters:
-
-  external_network:
-    type: string
-    label: External network
-    description: The external network to which to attach.
-
 resources:
+
+  seed_git_container:
+    type: OS::Swift::Container
+    properties:
+      name: seed-git
+      PurgeOnDelete: false
+
+  seed_git_history_container:
+    type: OS::Swift::Container
+    properties:
+      name: seed-git-history
+      PurgeOnDelete: false
 
   seed_volume:
     type: OS::Cinder::Volume
@@ -19,17 +24,8 @@ resources:
       multiattach: false
       size: 50
 
-  seed_ip:
-    type: OS::Neutron::FloatingIP
-    properties:
-      floating_network: { get_param: external_network }
-
 outputs:
 
   seed_volume:
     description: Block storage volume for the main seed server.
     value: { get_resource: seed_volume }
-
-  seed_ip:
-    description: The floating IP for the main seed server.
-    value: { get_resource: seed_ip }

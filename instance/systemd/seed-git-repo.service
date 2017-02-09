@@ -1,0 +1,11 @@
+[Unit]
+Description=Seed Git Repository
+Requires=user-git.service
+After=user-git.service
+ConditionFirstBoot=true
+ConditionPathExists=!/media/volume/home/git/seed.git
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/home/core/restore-seed-git.sh

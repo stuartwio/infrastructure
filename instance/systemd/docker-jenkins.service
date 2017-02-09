@@ -1,0 +1,8 @@
+[Unit]
+Description=Jenkins container
+After=docker-jenkins-create.service
+
+[Service]
+Restart=always
+ExecStart=/usr/bin/docker start --attach jenkins
+ExecStop=/usr/bin/docker stop jenkins

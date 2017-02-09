@@ -79,11 +79,6 @@ resources:
         protocol: tcp
         remote_ip_prefix: 86.11.0.0/16
 
-  seed_ip:
-    type: OS::Neutron::FloatingIP
-    properties:
-      floating_network: { get_param: external_network }
-
 outputs:
 
   seed_network:
@@ -93,7 +88,3 @@ outputs:
   seed_subnet:
     description: The seed subnet.
     value: { get_resource: seed_subnet }
-
-  seed_ip:
-    description: The floating IP for the main seed server.
-    value: { get_resource: seed_ip }

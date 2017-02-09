@@ -1,0 +1,13 @@
+[Unit]
+Description=Creates authorized SSH keys file for Git access
+Requires=user-git.service
+After=user-git.service
+ConditionFirstBoot=true
+ConditionPathExists=!/media/volume/home/git/.ssh/authorized_keys
+
+[Service]
+User=git
+Group=git
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/bin/touch /media/volume/home/git/.ssh/authorized_keys

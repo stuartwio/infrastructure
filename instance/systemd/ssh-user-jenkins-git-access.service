@@ -1,0 +1,10 @@
+[Unit]
+Description=Adds Jenkins SSH key to Git access
+Requires=ssh-git-access.service ssh-user-jenkins.service
+After=ssh-git-access.service ssh-user-jenkins.service
+ConditionFirstBoot=true
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/bin/bash -c '/usr/bin/cat /media/volume/home/jenkins/.ssh/id_rsa.pub >> /media/volume/home/git/.ssh/authorized_keys'

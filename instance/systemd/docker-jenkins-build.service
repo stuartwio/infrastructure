@@ -1,0 +1,10 @@
+[Unit]
+Description=Build Jenkins image
+Requires=docker.service
+After=docker.service
+ConditionFirstBoot=true
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/bin/docker build --tag stuartw.io/jenkins /var/lib/docker-jenkins
