@@ -36,15 +36,42 @@ if [[ ! -d /var/lib/docker/volumes/git-volume ]] ; then
         --name git-volume
 fi
 
+if [[ ! -d /var/lib/docker/volumes/git-ssh-volume ]] ; then
+    docker volume create \
+        --driver local \
+        --name git-ssh-volume
+fi
+
 docker create \
     --interactive \
-    --volume git-volume:/git-volume \
     --volume jenkins-volume:/jenkins-volume \
+    --volume git-volume:/git-volume \
+    --volume git-ssh-volume:/etc/ssh \
     --name setup \
     alpine /bin/sh
 
 docker start setup
 docker exec setup /bin/sh -xc "apk update && apk add openssh"
+
+docker exec setup /bin/sh -xc "sed -i 's/#\?PasswordAuthentication\b.*/PasswordAuthentication no/' /etc/ssh/sshd_config"
+docker exec setup /bin/sh -xc "sed -i 's/#\?ChallengeResponseAuthentication\b.*/ChallengeResponseAuthentication no/' /etc/ssh/sshd_config"
+docker exec setup /bin/sh -xc "sed -i 's/#\?PermitRootLogin\b.*$/PermitRootLogin no/' /etc/ssh/sshd_config"
+
+if docker exec setup /bin/sh -xc "[[ ! -f /etc/ssh/ssh_host_rsa_key ]]" ; then
+    docker exec setup /bin/sh -xc "ssh-keygen -N '' -t rsa -f /etc/ssh/ssh_host_rsa_key"
+fi
+
+if docker exec setup /bin/sh -xc "[[ ! -f /etc/ssh/ssh_host_dsa_key ]]" ; then
+    docker exec setup /bin/sh -xc "ssh-keygen -N '' -t dsa -f /etc/ssh/ssh_host_dsa_key"
+fi
+
+if docker exec setup /bin/sh -xc "[[ ! -f /etc/ssh/ssh_host_ecdsa_key ]]" ; then
+    docker exec setup /bin/sh -xc "ssh-keygen -N '' -t ecdsa -f /etc/ssh/ssh_host_ecdsa_key"
+fi
+
+if docker exec setup /bin/sh -xc "[[ ! -f /etc/ssh/ssh_host_ed25519_key ]]" ; then
+    docker exec setup /bin/sh -xc "ssh-keygen -N '' -t ed25519 -f /etc/ssh/ssh_host_ed25519_key"
+fi
 
 if docker exec setup /bin/sh -xc "[[ ! -d /git-volume/.ssh ]]" ; then
     docker exec setup /bin/sh -xc "mkdir /git-volume/.ssh"
@@ -72,7 +99,7 @@ docker stop setup
 docker rm setup
 
 docker create \
-  --volume /etc/ssh:/etc/ssh \
+  --volume git-ssh-volume:/etc/ssh \
   --volume git-volume:/home/git \
   --memory-reservation 16m \
   --memory 16m \

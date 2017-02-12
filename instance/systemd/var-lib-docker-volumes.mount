@@ -1,5 +1,5 @@
 [Unit]
-Description=Mount volume to /media/volume
+Description=Mount volume to /var/lib/docker/volumes
 Requires=dev-xvdk.device format-volume.service
 After=dev-xvdk.device format-volume.service
 
