@@ -1,0 +1,9 @@
+[Unit]
+Description=Mount volume to /opt/git/ssh
+Requires=dev-xvdk.device format-volume.service
+After=dev-xvdk.device format-volume.service
+
+[Mount]
+What=/dev/xvdk3
+Where=/opt/git/ssh
+Type=ext4

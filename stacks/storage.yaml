@@ -4,9 +4,9 @@ Description: Long term storage for the seed infrastructure
 
 Parameters:
 
-  GitBucketName:
+  GitBucketPrefix:
     Type: String
-    Default: io-stuartw-seed-git
+    Default: io-stuartw-seed
     Description: The S3 bucket name to use for git storage
 
 Resources:
@@ -14,6 +14,6 @@ Resources:
   GitBucket:
     Type: AWS::S3::Bucket
     Properties:
-      BucketName: !Ref GitBucketName
+      BucketName: !Sub ${GitBucketPrefix}-git
       VersioningConfiguration:
         Status: Enabled

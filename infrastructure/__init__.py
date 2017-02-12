@@ -12,34 +12,43 @@ class SeedDeployment(object):
         self._logger = logging.getLogger(__name__)
 
     def deploy(self):
-        self.log_stack_deployment('io-stuartw-seed-storage', 'aws')
+        prefix = 'io-stuartw-seed-test'
+
+        storage_stack_name = '{}-storage'.format(prefix)
+        self.log_stack_deployment(storage_stack_name, 'aws')
         storage_stack = aws.deploy_stack(
-            stack_name='io-stuartw-seed-storage',
+            stack_name=storage_stack_name.format(prefix),
             template_body=File('stacks/storage.yaml').read(),
-            resource_types=['AWS::S3::*']
+            resource_types=['AWS::S3::*'],
+            parameters={
+                'GitBucketPrefix': prefix
+            }
         )
         self.log_stack_deployment_complete(storage_stack)
 
-        self.log_stack_deployment('io-stuartw-seed-resources', 'aws')
+        resources_stack_name = '{}-resources'.format(prefix)
+        self.log_stack_deployment(resources_stack_name, 'aws')
         resources_stack = aws.deploy_stack(
-            stack_name='io-stuartw-seed-resources',
+            stack_name=resources_stack_name,
             template_body=File('stacks/resources.yaml').read(),
             resource_types=['AWS::EC2::*']
         )
         self.log_stack_deployment_complete(resources_stack)
 
         # TODO: Might need to do this as a blue / green deploy
-        self.log_stack_deployment('io-stuartw-seed-network', 'aws')
+        network_stack_name = '{}-network'.format(prefix)
+        self.log_stack_deployment(network_stack_name, 'aws')
         network_stack = aws.deploy_stack(
-            stack_name='io-stuartw-seed-network',
+            stack_name=network_stack_name,
             template_body=File('stacks/network.yaml').read(),
             capabilities=['CAPABILITY_NAMED_IAM']
         )
         self.log_stack_deployment_complete(network_stack)
 
-        self.log_stack_deployment('io-stuartw-seed-deployment', 'aws')
+        deployment_stack_name = '{}-deployment'.format(prefix)
+        self.log_stack_deployment(deployment_stack_name, 'aws')
         deployment_stack = aws.deploy_stack_by_replacement(
-            stack_name='io-stuartw-seed-deployment',
+            stack_name=deployment_stack_name,
             template_body=File('stacks/deployment.yaml').read(),
             capabilities=['CAPABILITY_IAM'],
             parameters={
@@ -77,9 +86,19 @@ class SeedDeployment(object):
                         content=File('instance/systemd/format-volume.service').read()
                     ),
                     dict(
-                        name='media-volume.mount',
+                        name='home-jenkins.mount',
                         command='start',
-                        content=File('instance/systemd/media-volume.mount').read()
+                        content=File('instance/systemd/home-jenkins.mount').read()
+                    ),
+                    dict(
+                        name='home-git.mount',
+                        command='start',
+                        content=File('instance/systemd/home-git.mount').read()
+                    ),
+                    dict(
+                        name='opt-git-ssh.mount',
+                        command='start',
+                        content=File('instance/systemd/opt-git-ssh.mount').read()
                     ),
                     dict(
                         name='setup-instance.service',

@@ -3,14 +3,18 @@
 DOCKER_REPO=stuartw.io
 GIT_REPO=https://github.com/stuartwio/infrastructure.git
 CORE_HOME=/home/core
-JENKINS_HOME=/media/volume/jenkins/home
-GIT_HOME=/media/volume/git/home
-GIT_SSH_HOME=/media/volume/git/ssh
+JENKINS_HOME=/home/jenkins
+GIT_HOME=/home/git
+GIT_SSH_HOME=/opt/git/ssh
 
 git clone "$GIT_REPO"
 
 docker build --tag "$DOCKER_REPO/jenkins" /root/infrastructure/docker/jenkins
 docker build --tag "$DOCKER_REPO/git" /root/infrastructure/docker/git
+
+# Set up the users that are being used within the container, this
+# prevents accidental overlap of users between the host and container
+# and simplifies permissions.
 
 groupadd --gid 1001 git
 groupadd --gid 1000 jenkins
@@ -20,7 +24,7 @@ useradd --uid 1001 \
   --skel /usr/share/skel \
   --home-dir "$GIT_HOME" \
   --gid git \
-  --shell /bin/nologin \
+  --shell /sbin/nologin \
   git
 useradd --uid 1000 \
   --create-home \
@@ -30,13 +34,22 @@ useradd --uid 1000 \
   --shell /sbin/nologin \
   jenkins
 
+# Configure SSHD for the Git container, this enables the Jenkins
+# container to access the repositories directly using the isolated
+# Docker container network over SSH. The SSHD configuration allows
+# only key authentication and does not permit root login. The host
+# fingerprints are retained on a persistent volume and are NOT
+# refreshed when a new host or container is started, this allows
+# the host to be replaced without fingerprints having to be
+# redistributed.
+
 docker run \
     --rm \
     --volume "$JENKINS_HOME:/jenkins-volume" \
     --volume "$GIT_HOME:/git-volume" \
     --volume "$GIT_SSH_HOME:/etc/ssh" \
     --name setup \
-    alpine setup /bin/sh -xc "apk update && apk add openssh"
+    alpine /bin/sh -xc "apk update && apk add openssh"
 
 sed -i 's/#\?PasswordAuthentication\b.*/PasswordAuthentication no/' "$GIT_SSH_HOME/sshd_config"
 sed -i 's/#\?ChallengeResponseAuthentication\b.*/ChallengeResponseAuthentication no/' "$GIT_SSH_HOME/sshd_config"

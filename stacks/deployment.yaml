@@ -39,7 +39,7 @@ Resources:
     Type: AWS::IAM::InstanceProfile
     Properties:
       Roles:
-      - Fn::ImportValue: !Sub ${NetworkStack}:io-stuartw-seed-role
+      - Fn::ImportValue: !Sub ${NetworkStack}:role
       Path: /
 
   Instance:
@@ -50,26 +50,27 @@ Resources:
       ImageId: !FindInMap [AMI, !Ref "AWS::Region", coreos]
       IamInstanceProfile: !Ref InstanceProfile
       SubnetId:
-        Fn::ImportValue: !Sub ${NetworkStack}:io-stuartw-seed-subnet
+        Fn::ImportValue: !Sub ${NetworkStack}:subnet
       Volumes:
       - Device: /dev/sdk
         VolumeId:
-          Fn::ImportValue: !Sub ${ResourcesStack}:io-stuartw-seed-volume
+          Fn::ImportValue: !Sub ${ResourcesStack}:volume
       SecurityGroupIds:
-      - Fn::ImportValue: !Sub ${NetworkStack}:io-stuartw-seed-outbound-internet-http-sg
-      - Fn::ImportValue: !Sub ${NetworkStack}:io-stuartw-seed-inbound-jenkins-admin-sg
-      - Fn::ImportValue: !Sub ${NetworkStack}:io-stuartw-seed-inbound-ssh-sg
+      - Fn::ImportValue: !Sub ${NetworkStack}:outbound-internet-http-sg
+      - Fn::ImportValue: !Sub ${NetworkStack}:inbound-jenkins-admin-sg
+      - Fn::ImportValue: !Sub ${NetworkStack}:inbound-ssh-sg
       UserData:
         Fn::Base64: !Ref UserData
       Tags:
-      - { Key: Name, Value: io-stuartw-seed-instance }
+      - Key: Name
+        Value: !Sub ${AWS::StackName}-instance
 
   IpAssociation:
     Type: AWS::EC2::EIPAssociation
     Properties:
       InstanceId: !Ref Instance
       AllocationId:
-        Fn::ImportValue: !Sub ${ResourcesStack}:io-stuartw-seed-ip
+        Fn::ImportValue: !Sub ${ResourcesStack}:ip
 
 Outputs:
 
@@ -77,4 +78,4 @@ Outputs:
     Description: The seed instance.
     Value: !Ref Instance
     Export:
-      Name: !Sub ${AWS::StackName}:io-stuartw-seed-instance
+      Name: !Sub ${AWS::StackName}:instance

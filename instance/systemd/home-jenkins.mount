@@ -1,9 +1,9 @@
 [Unit]
-Description=Mount volume to /var/lib/docker/volumes
+Description=Mount volume to /home/jenkins
 Requires=dev-xvdk.device format-volume.service
 After=dev-xvdk.device format-volume.service
 
 [Mount]
 What=/dev/xvdk1
-Where=/media/volume
+Where=/home/jenkins
 Type=ext4

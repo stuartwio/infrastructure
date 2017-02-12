@@ -31,7 +31,8 @@ Resources:
       VolumeType: !Ref VolumeType
       Size: 50
       Tags:
-      - { Key: Name, Value: io-stuartw-seed-volume }
+      - Key: Name
+        Value: !Sub ${AWS::StackName}-volume
 
 Outputs:
 
@@ -39,10 +40,10 @@ Outputs:
     Description: The floating IP for the main seed server.
     Value: !GetAtt Ip.AllocationId
     Export:
-      Name: !Sub ${AWS::StackName}:io-stuartw-seed-ip
+      Name: !Sub ${AWS::StackName}:ip
 
   Volume:
     Description: The seed volume.
     Value: !Ref Volume
     Export:
-      Name: !Sub ${AWS::StackName}:io-stuartw-seed-volume
+      Name: !Sub ${AWS::StackName}:volume

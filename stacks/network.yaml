@@ -18,6 +18,13 @@ Mappings:
       vpc: 10.0.0.0/16
       subnet: 10.0.1.0/24
 
+Parameters:
+
+  SeedRoleName:
+    Type: String
+    Default: io-stuartw-seed-role
+    Description: The name of the role for the seed instances.
+
 Resources:
 
   Vpc:
@@ -25,7 +32,8 @@ Resources:
     Properties:
       CidrBlock: !FindInMap [CidrBlock, !Ref "AWS::Region", vpc]
       Tags:
-      - { Key: Name, Value: io-stuartw-seed-vpc }
+      - Key: Name
+        Value: !Sub ${AWS::StackName}-vpc
 
   SeedSubnet:
     Type: AWS::EC2::Subnet
@@ -35,13 +43,15 @@ Resources:
       CidrBlock: !FindInMap [CidrBlock, !Ref "AWS::Region", subnet]
       MapPublicIpOnLaunch: true
       Tags:
-      - { Key: Name, Value: io-stuartw-seed-subnet }
+      - Key: Name
+        Value: !Sub ${AWS::StackName}-subnet
 
   SeedInternetGateway:
     Type: AWS::EC2::InternetGateway
     Properties:
       Tags:
-      - { Key: Name, Value: io-stuartw-seed-igw }
+      - Key: Name
+        Value: !Sub ${AWS::StackName}-igw
 
   VpcInternetGateway:
     Type: AWS::EC2::VPCGatewayAttachment
@@ -54,7 +64,8 @@ Resources:
     Properties:
       VpcId: !Ref Vpc
       Tags:
-      - { Key: Name, Value: io-stuartw-seed-rtb }
+      - Key: Name
+        Value: !Sub ${AWS::StackName}-rtb
 
   SeedInternetIpV4Route:
     Type: AWS::EC2::Route
@@ -91,7 +102,8 @@ Resources:
         IpProtocol: tcp
         CidrIp: 0.0.0.0/0
       Tags:
-      - { Key: Name, Value: io-stuartw-seed-outbound-internet-http-sg }
+      - Key: Name
+        Value: !Sub ${AWS::StackName}-outbound-internet-http-sg
 
   SeedInboundJenkinsAdminSecurityGroup:
     Type: AWS::EC2::SecurityGroup
@@ -108,7 +120,8 @@ Resources:
         IpProtocol: tcp
         CidrIp: 213.205.192.0/19
       Tags:
-      - { Key: Name, Value: io-stuartw-seed-inbound-jenkins-admin-sg }
+      - Key: Name
+        Value: !Sub ${AWS::StackName}-inbound-jenkins-admin-sg
 
   SeedInboundSshSecurityGroup:
     Type: AWS::EC2::SecurityGroup
@@ -125,12 +138,13 @@ Resources:
         IpProtocol: tcp
         CidrIp: 213.205.192.0/19
       Tags:
-      - { Key: Name, Value: io-stuartw-seed-inbound-ssh-sg }
+      - Key: Name
+        Value: !Sub ${AWS::StackName}-inbound-ssh-sg
 
   SeedRole:
     Type: AWS::IAM::Role
     Properties:
-      RoleName: io-stuartw-seed-role
+      RoleName: !Sub ${AWS::StackName}-${AWS::Region}-${SeedRoleName}
       AssumeRolePolicyDocument:
         Version: "2012-10-17"
         Statement:
@@ -150,34 +164,34 @@ Outputs:
     Description: The seed network.
     Value: !Ref Vpc
     Export:
-      Name: !Sub ${AWS::StackName}:io-stuartw-seed-vpc
+      Name: !Sub ${AWS::StackName}:vpc
 
   SeedSubnet:
     Description: The seed subnet.
     Value: !Ref SeedSubnet
     Export:
-      Name: !Sub ${AWS::StackName}:io-stuartw-seed-subnet
+      Name: !Sub ${AWS::StackName}:subnet
 
   SeedOutboundInternetHttpSecurityGroup:
     Description: Outbound access to internet over HTTP.
     Value: !Ref SeedOutboundInternetHttpSecurityGroup
     Export:
-      Name: !Sub ${AWS::StackName}:io-stuartw-seed-outbound-internet-http-sg
+      Name: !Sub ${AWS::StackName}:outbound-internet-http-sg
 
   SeedInboundJenkinsAdminSecurityGroup:
     Description: Inbound access for Jenkins administration.
     Value: !Ref SeedInboundJenkinsAdminSecurityGroup
     Export:
-      Name: !Sub ${AWS::StackName}:io-stuartw-seed-inbound-jenkins-admin-sg
+      Name: !Sub ${AWS::StackName}:inbound-jenkins-admin-sg
 
   SeedInboundSshSecurityGroup:
     Description: Inbound access via SSH.
     Value: !Ref SeedInboundSshSecurityGroup
     Export:
-      Name: !Sub ${AWS::StackName}:io-stuartw-seed-inbound-ssh-sg
+      Name: !Sub ${AWS::StackName}:inbound-ssh-sg
 
   SeedRole:
     Description: Access role for seed instances.
     Value: !Ref SeedRole
     Export:
-      Name: !Sub ${AWS::StackName}:io-stuartw-seed-role
+      Name: !Sub ${AWS::StackName}:role
