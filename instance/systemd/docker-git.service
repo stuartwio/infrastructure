@@ -1,0 +1,9 @@
+[Unit]
+Description=Git container
+Requires=setup-instance.service
+After=setup-instance.service
+
+[Service]
+Restart=always
+ExecStart=/usr/bin/docker start --attach git
+ExecStop=/usr/bin/docker stop git

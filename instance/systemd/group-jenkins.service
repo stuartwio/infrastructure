@@ -1,8 +1,0 @@
-[Unit]
-Description=Create Jenkins group
-ConditionFirstBoot=true
-
-[Service]
-Type=oneshot
-RemainAfterExit=yes
-ExecStart=/usr/sbin/groupadd --gid 1000 jenkins

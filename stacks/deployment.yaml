@@ -1,44 +1,80 @@
-heat_template_version: "2015-04-30"
+AWSTemplateFormatVersion: "2010-09-09"
 
-description: Deployment stack.
+Description: Deploys a seed instance to the seed infrastructure
 
-parameters:
+Mappings:
 
-  seed_keypair:
-    type: string
-    label: Seed keypair
-    description: The keypair to use to connect to the instance.
+  AMI:
+    eu-west-1:
+      coreos: ami-80e1bae6
+      linux: ami-70edb016
 
-  seed_network:
-    type: string
-    label: Seed network
-    description: The seed network into which to deploy.
+Parameters:
 
-  seed_user_data:
-    type: string
-    label: Seed user data
-    description: The user data to user for the instance
+  ResourcesStack:
+    Type: String
+    Description: The resources for the seed infrastructure.
 
-resources:
+  NetworkStack:
+    Type: String
+    Description: The seed network into which to deploy.
 
-  seed_instance:
-    type: OS::Nova::Server
-    properties:
-      name: main.seed.stuartw.io
-      key_name: { get_param: seed_keypair }
-      flavor: 1C-1GB
-      image: CoreOS 1068.9.0
-      networks:
-      - network: { get_param: seed_network }
-      user_data: { get_param: seed_user_data }
-      user_data_format: RAW
-      security_groups:
-      - seed-jenkins-admin
-      - seed-jenkins-internet
-      - seed-ssh
+  UserData:
+    Type: String
+    Description: The user data to user for the instance
 
-outputs:
+  KeyPair:
+    Type: AWS::EC2::KeyPair::KeyName
+    Default: io-stuartw-seed
+    Description: The keypair to use to connect to the instance.
 
-  seed_instance:
-    description: The seed instance.
-    value: { get_resource: seed_instance }
+  InstanceType:
+    Type: String
+    Default: t2.micro
+    Description: The instance type to launch.
+
+Resources:
+
+  InstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Roles:
+      - Fn::ImportValue: !Sub ${NetworkStack}:io-stuartw-seed-role
+      Path: /
+
+  Instance:
+    Type: AWS::EC2::Instance
+    Properties:
+      KeyName: !Ref KeyPair
+      InstanceType: !Ref InstanceType
+      ImageId: !FindInMap [AMI, !Ref "AWS::Region", coreos]
+      IamInstanceProfile: !Ref InstanceProfile
+      SubnetId:
+        Fn::ImportValue: !Sub ${NetworkStack}:io-stuartw-seed-subnet
+      Volumes:
+      - Device: /dev/sdk
+        VolumeId:
+          Fn::ImportValue: !Sub ${ResourcesStack}:io-stuartw-seed-volume
+      SecurityGroupIds:
+      - Fn::ImportValue: !Sub ${NetworkStack}:io-stuartw-seed-outbound-internet-http-sg
+      - Fn::ImportValue: !Sub ${NetworkStack}:io-stuartw-seed-inbound-jenkins-admin-sg
+      - Fn::ImportValue: !Sub ${NetworkStack}:io-stuartw-seed-inbound-ssh-sg
+      UserData:
+        Fn::Base64: !Ref UserData
+      Tags:
+      - { Key: Name, Value: io-stuartw-seed-instance }
+
+  IpAssociation:
+    Type: AWS::EC2::EIPAssociation
+    Properties:
+      InstanceId: !Ref Instance
+      AllocationId:
+        Fn::ImportValue: !Sub ${ResourcesStack}:io-stuartw-seed-ip
+
+Outputs:
+
+  Instance:
+    Description: The seed instance.
+    Value: !Ref Instance
+    Export:
+      Name: !Sub ${AWS::StackName}:io-stuartw-seed-instance

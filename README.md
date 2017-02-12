@@ -25,7 +25,7 @@ TODO...
 ```bash
 source .venv/bin/activate
 pip install -r requirements.txt
-python infrastructure
+python -m infrastructure
 ```
 
 ```bash

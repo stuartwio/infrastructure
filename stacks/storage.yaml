@@ -1,31 +1,19 @@
-heat_template_version: "2015-04-30"
+AWSTemplateFormatVersion: "2010-09-09"
 
-description: Resources stack.
+Description: Long term storage for the seed infrastructure
 
-resources:
+Parameters:
 
-  seed_git_container:
-    type: OS::Swift::Container
-    properties:
-      name: seed-git
-      PurgeOnDelete: false
+  GitBucketName:
+    Type: String
+    Default: io-stuartw-seed-git
+    Description: The S3 bucket name to use for git storage
 
-  seed_git_history_container:
-    type: OS::Swift::Container
-    properties:
-      name: seed-git-history
-      PurgeOnDelete: false
+Resources:
 
-  seed_volume:
-    type: OS::Cinder::Volume
-    properties:
-      name: seed
-      description: Block storage volume for the main seed server.
-      multiattach: false
-      size: 50
-
-outputs:
-
-  seed_volume:
-    description: Block storage volume for the main seed server.
-    value: { get_resource: seed_volume }
+  GitBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Ref GitBucketName
+      VersioningConfiguration:
+        Status: Enabled

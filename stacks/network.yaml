@@ -1,90 +1,175 @@
-heat_template_version: "2015-04-30"
+AWSTemplateFormatVersion: "2010-09-09"
 
-description: Network stack.
+Description: Networking configuration for the seed infrastructure
 
-parameters:
+Mappings:
 
-  external_network:
-    type: string
-    label: External network
-    description: The external network to which to attach.
+  AvailabilityZone:
+    eu-west-1:
+      a: eu-west-1a
+    eu-west-2:
+      a: eu-west-2a
 
-resources:
+  CidrBlock:
+    eu-west-1:
+      vpc: 10.1.0.0/16
+      subnet: 10.1.1.0/24
+    eu-west-2:
+      vpc: 10.0.0.0/16
+      subnet: 10.0.1.0/24
 
-  seed_network:
-    type: OS::Neutron::Net
-    properties:
-      name: seed.stuartw.io
+Resources:
 
-  seed_subnet:
-    type: OS::Neutron::Subnet
-    properties:
-      name: main.subnet.seed.stuartw.io
-      network: { get_resource: seed_network }
-      cidr: 10.0.1.0/24
-      gateway_ip: 10.0.1.1
-      ip_version: 4
+  Vpc:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: !FindInMap [CidrBlock, !Ref "AWS::Region", vpc]
+      Tags:
+      - { Key: Name, Value: io-stuartw-seed-vpc }
 
-  seed_router:
-    type: OS::Neutron::Router
-    properties:
-      name: router.seed.stuartw.io
-      external_gateway_info:
-        network: { get_param: external_network }
+  SeedSubnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      AvailabilityZone: !FindInMap [AvailabilityZone, !Ref "AWS::Region", a]
+      CidrBlock: !FindInMap [CidrBlock, !Ref "AWS::Region", subnet]
+      MapPublicIpOnLaunch: true
+      Tags:
+      - { Key: Name, Value: io-stuartw-seed-subnet }
 
-  seed_router_subnet_interface:
-    type: OS::Neutron::RouterInterface
-    properties:
-      router: { get_resource: seed_router }
-      subnet: { get_resource: seed_subnet }
+  SeedInternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+      - { Key: Name, Value: io-stuartw-seed-igw }
 
-  seed_jenkins_admin_security_group:
-    type: OS::Neutron::SecurityGroup
-    properties:
-      name: seed-jenkins-admin
-      description: Security group for Jenkins administration access.
-      rules:
-      - direction: ingress
-        port_range_min: 8080
-        port_range_max: 8080
-        protocol: tcp
-        remote_ip_prefix: 86.11.0.0/16
+  VpcInternetGateway:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref Vpc
+      InternetGatewayId: !Ref SeedInternetGateway
 
-  seed_jenkins_internet_security_group:
-    type: OS::Neutron::SecurityGroup
-    properties:
-      name: seed-jenkins-internet
-      description: Security group for Jenkins internet access.
-      rules:
-      - direction: egress
-        port_range_min: 80
-        port_range_max: 80
-        protocol: tcp
-        remote_ip_prefix: 0.0.0.0/0
-      - direction: egress
-        port_range_min: 443
-        port_range_max: 443
-        protocol: tcp
-        remote_ip_prefix: 0.0.0.0/0
+  SeedRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref Vpc
+      Tags:
+      - { Key: Name, Value: io-stuartw-seed-rtb }
 
-  seed_ssh_security_group:
-    type: OS::Neutron::SecurityGroup
-    properties:
-      name: seed-ssh
-      description: Security group for SSH access.
-      rules:
-      - direction: ingress
-        port_range_min: 22
-        port_range_max: 22
-        protocol: tcp
-        remote_ip_prefix: 86.11.0.0/16
+  SeedInternetIpV4Route:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref SeedRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref SeedInternetGateway
 
-outputs:
+  SeedInternetIpV6Route:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref SeedRouteTable
+      DestinationIpv6CidrBlock: ::/0
+      GatewayId: !Ref SeedInternetGateway
 
-  seed_network:
-    description: The seed network.
-    value: { get_resource: seed_network }
+  SeedRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref SeedRouteTable
+      SubnetId: !Ref SeedSubnet
 
-  seed_subnet:
-    description: The seed subnet.
-    value: { get_resource: seed_subnet }
+  SeedOutboundInternetHttpSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      VpcId: !Ref Vpc
+      GroupDescription: Outbound access to internet over HTTP.
+      SecurityGroupEgress:
+      - FromPort: 80
+        ToPort: 80
+        IpProtocol: tcp
+        CidrIp: 0.0.0.0/0
+      - FromPort: 443
+        ToPort: 443
+        IpProtocol: tcp
+        CidrIp: 0.0.0.0/0
+      Tags:
+      - { Key: Name, Value: io-stuartw-seed-outbound-internet-http-sg }
+
+  SeedInboundJenkinsAdminSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      VpcId: !Ref Vpc
+      GroupDescription: Inbound access for Jenkins administration.
+      SecurityGroupIngress:
+      - FromPort: 8080
+        ToPort: 8080
+        IpProtocol: tcp
+        CidrIp: 86.11.0.0/16
+      Tags:
+      - { Key: Name, Value: io-stuartw-seed-inbound-jenkins-admin-sg }
+
+  SeedInboundSshSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      VpcId: !Ref Vpc
+      GroupDescription: Inbound access via SSH.
+      SecurityGroupIngress:
+      - FromPort: 22
+        ToPort: 22
+        IpProtocol: tcp
+        CidrIp: 86.11.0.0/16
+      Tags:
+      - { Key: Name, Value: io-stuartw-seed-inbound-ssh-sg }
+
+  SeedRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: io-stuartw-seed-role
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+        - Effect: allow
+          Principal:
+            Service:
+            - ec2.amazonaws.com
+          Action:
+          - sts:AssumeRole
+      ManagedPolicyArns:
+      - arn:aws:iam::aws:policy/AdministratorAccess
+      Path: /
+
+Outputs:
+
+  Vpc:
+    Description: The seed network.
+    Value: !Ref Vpc
+    Export:
+      Name: !Sub ${AWS::StackName}:io-stuartw-seed-vpc
+
+  SeedSubnet:
+    Description: The seed subnet.
+    Value: !Ref SeedSubnet
+    Export:
+      Name: !Sub ${AWS::StackName}:io-stuartw-seed-subnet
+
+  SeedOutboundInternetHttpSecurityGroup:
+    Description: Outbound access to internet over HTTP.
+    Value: !Ref SeedOutboundInternetHttpSecurityGroup
+    Export:
+      Name: !Sub ${AWS::StackName}:io-stuartw-seed-outbound-internet-http-sg
+
+  SeedInboundJenkinsAdminSecurityGroup:
+    Description: Inbound access for Jenkins administration.
+    Value: !Ref SeedInboundJenkinsAdminSecurityGroup
+    Export:
+      Name: !Sub ${AWS::StackName}:io-stuartw-seed-inbound-jenkins-admin-sg
+
+  SeedInboundSshSecurityGroup:
+    Description: Inbound access via SSH.
+    Value: !Ref SeedInboundSshSecurityGroup
+    Export:
+      Name: !Sub ${AWS::StackName}:io-stuartw-seed-inbound-ssh-sg
+
+  SeedRole:
+    Description: Access role for seed instances.
+    Value: !Ref SeedRole
+    Export:
+      Name: !Sub ${AWS::StackName}:io-stuartw-seed-role

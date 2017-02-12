@@ -1,10 +1,10 @@
 [Unit]
 Description=Formats the volume drive
-Requires=dev-vdb.device
-After=dev-vdb.device
+Requires=dev-xvdk.device git-clone.service
+After=dev-xvdk.device git-clone.service
 ConditionFirstBoot=true
 
 [Service]
 Type=oneshot
 RemainAfterExit=yes
-ExecStart=/home/core/format-volume.sh
+ExecStart=/root/infrastructure/instance/scripts/format-volume.sh

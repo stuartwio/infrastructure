@@ -1,0 +1,8 @@
+[Unit]
+Description=Checks out the Git repository
+ConditionFirstBoot=true
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/bin/git clone https://github.com/stuartwio/infrastructure.git /root/infrastructure

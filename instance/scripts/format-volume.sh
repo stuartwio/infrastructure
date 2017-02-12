@@ -1,12 +1,12 @@
 #!/bin/bash -x
 
 # Devices
-DEV="/dev/vdb"
-DEV_PART="/dev/vdb1"
-DEV_NAME="vdb1"
+DEV="/dev/xvdk"
+DEV_PART="/dev/xvdk1"
+DEV_NAME="xvdk1"
 
 # Label
-LABEL="VOLUME-A"
+LABEL="VOL-A"
 
 # Filesystem
 FS="ext4"
