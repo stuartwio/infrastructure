@@ -31,21 +31,23 @@ ssh-keygen -t rsa -C jenkins.stuartw.io -f /media/volume/home/jenkins/.ssh/id_rs
 cat /media/volume/home/jenkins/.ssh/id_rsa.pub >> /media/volume/home/git/.ssh/authorized_keys
 
 docker create \
+  --volume /media/volume/home/git:/home/git \
+  --memory-reservation 16m \
+  --memory 16m \
+  --memory-swap 16m \
+  --cpu-shares 256 \
+  --name git \
+  --hostname git \
+  stuartw.io/git
+docker create \
   --volume /media/volume/home/jenkins:/var/jenkins_home \
+  --link git:git \
   --publish 8080:8080 \
   --memory-reservation 768m \
   --memory 768m \
   --memory-swap 1024m \
   --cpu-shares 1024 \
   --name jenkins \
+  --hostname jenkins \
   --env "JAVA_OPTS=-Dhudson.DNSMultiCast.disabled=true -Xmx512m -XX:MaxMetaspaceSize=128m" \
   stuartw.io/jenkins
-docker create \
-  --volume /media/volume/home/git:/home/git \
-  --publish 2222:22 \
-  --memory-reservation 16m \
-  --memory 16m \
-  --memory-swap 16m \
-  --cpu-shares 256 \
-  --name git \
-  stuartw.io/git
