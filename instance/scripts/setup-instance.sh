@@ -8,40 +8,72 @@ git clone "$GIT_REPO"
 docker build --tag "$DOCKER_REPO/jenkins" /root/infrastructure/docker/jenkins
 docker build --tag "$DOCKER_REPO/git" /root/infrastructure/docker/git
 
-mkdir --parents /media/volume/home
-
 groupadd --gid 1001 git
 groupadd --gid 1000 jenkins
 
 useradd --uid 1001 \
   --create-home \
-  --skel /usr/share/skel \
-  --home-dir /media/volume/home/git \
+  --home-dir /home/git \
   --gid git \
-  --shell /bin/bash \
+  --shell /bin/nologin \
   git
 useradd --uid 1000 \
   --create-home \
-  --skel /usr/share/skel \
-  --home-dir /media/volume/home/jenkins \
+  --home-dir /home/jenkins \
   --gid jenkins \
   --shell /sbin/nologin \
   jenkins
 
-touch /media/volume/home/git/.ssh/authorized_keys
-ssh-keygen -t rsa -C jenkins -f /media/volume/home/jenkins/.ssh/id_rsa
-cat /home/core/.ssh/authorized_keys >> /media/volume/home/git/.ssh/authorized_keys
-cat /media/volume/home/jenkins/.ssh/id_rsa.pub >> /media/volume/home/git/.ssh/authorized_keys
+if [[ ! -d /var/lib/docker/volumes/jenkins-volume ]] ; then
+    docker volume create \
+        --driver local \
+        --name jenkins-volume
+fi
 
-git init --bare /media/volume/home/git/seed.git
-chown -R git:git /media/volume/home/git/seed.git
-
-mkdir -p /media/volume/git/etc/ssh
-chown -R git:git /media/volume/git/etc/ssh
+if [[ ! -d /var/lib/docker/volumes/git-volume ]] ; then
+    docker volume create \
+        --driver local \
+        --name git-volume
+fi
 
 docker create \
-  --volume /media/volume/git/etc/ssh:/etc/ssh \
-  --volume /media/volume/home/git:/home/git \
+    --interactive \
+    --volume git-volume:/git-volume \
+    --volume jenkins-volume:/jenkins-volume \
+    --name setup \
+    alpine /bin/sh
+
+docker start setup
+docker exec setup /bin/sh -xc "apk update && apk add openssh"
+
+if docker exec setup /bin/sh -xc "[[ ! -d /git-volume/.ssh ]]" ; then
+    docker exec setup /bin/sh -xc "mkdir /git-volume/.ssh"
+fi
+
+if docker exec setup /bin/sh -xc "[[ ! -f /git-volume/.ssh/authorized_keys ]]" ; then
+    docker exec setup /bin/sh -xc "touch /git-volume/.ssh/authorized_keys"
+    cat /home/core/.ssh/authorized_keys | docker exec setup /bin/sh -xc "cat - >> /git-volume/.ssh/authorized_keys"
+fi
+
+if docker exec setup /bin/sh -xc "[[ ! -d /jenkins-volume/.ssh ]]" ; then
+    docker exec setup /bin/sh -xc "mkdir /jenkins-volume/.ssh"
+fi
+
+if docker exec setup /bin/sh -xc "[[ ! -f /jenkins-volume/.ssh/id_rsa ]]" ; then
+    docker exec setup /bin/sh -xc "ssh-keygen -t rsa -N "" -C jenkins -f /jenkins-volume/.ssh/id_rsa"
+    docker exec setup /bin/sh -xc "cat /jenkins-volume/.ssh/id_rsa.pub >> /git-volume/.ssh/authorized_keys"
+fi
+
+if docker exec setup /bin/sh -xc "[[ ! -d /git-volume/seed.git ]]" ; then
+    docker exec setup /bin/sh -xc "git init --bare /git-volume/seed.git"
+fi
+
+docker stop setup
+docker rm setup
+
+docker create \
+  --volume /etc/ssh:/etc/ssh \
+  --volume git-volume:/home/git \
   --memory-reservation 16m \
   --memory 16m \
   --memory-swap 16m \
@@ -50,7 +82,7 @@ docker create \
   --hostname git \
   stuartw.io/git
 docker create \
-  --volume /media/volume/home/jenkins:/var/jenkins_home \
+  --volume jenkins-volume:/var/jenkins_home \
   --link git:git \
   --publish 8080:8080 \
   --memory-reservation 768m \
