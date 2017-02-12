@@ -80,6 +80,10 @@ if [[ ! -d "$GIT_HOME/seed.git" ]] ; then
     git init --bare "$GIT_HOME/seed.git"
 fi
 
+chown -R jenkins:jenkins "$JENKINS_HOME"
+chown -R git:git "$GIT_HOME"
+chown -R git:git "$GIT_SSH_HOME"
+
 docker create \
   --volume "$GIT_SSH_HOME:/etc/ssh" \
   --volume "$GIT_HOME:/home/git" \
