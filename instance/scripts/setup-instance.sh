@@ -36,7 +36,11 @@ cat /media/volume/home/jenkins/.ssh/id_rsa.pub >> /media/volume/home/git/.ssh/au
 git init --bare /media/volume/home/git/seed.git
 chown -R git:git /media/volume/home/git/seed.git
 
+mkdir -p /media/volume/git/etc/ssh
+chown -R git:git /media/volume/git/etc/ssh
+
 docker create \
+  --volume /media/volume/git/etc/ssh:/etc/ssh \
   --volume /media/volume/home/git:/home/git \
   --memory-reservation 16m \
   --memory 16m \

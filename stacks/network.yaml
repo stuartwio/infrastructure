@@ -103,6 +103,10 @@ Resources:
         ToPort: 8080
         IpProtocol: tcp
         CidrIp: 86.11.0.0/16
+      - FromPort: 8080
+        ToPort: 8080
+        IpProtocol: tcp
+        CidrIp: 213.205.192.0/19
       Tags:
       - { Key: Name, Value: io-stuartw-seed-inbound-jenkins-admin-sg }
 
@@ -116,6 +120,10 @@ Resources:
         ToPort: 22
         IpProtocol: tcp
         CidrIp: 86.11.0.0/16
+      - FromPort: 22
+        ToPort: 22
+        IpProtocol: tcp
+        CidrIp: 213.205.192.0/19
       Tags:
       - { Key: Name, Value: io-stuartw-seed-inbound-ssh-sg }
 

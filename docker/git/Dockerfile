@@ -16,6 +16,7 @@ COPY entrypoint.sh /
 
 EXPOSE 22
 
+VOLUME /etc/ssh
 VOLUME /home/git
 
 USER git
