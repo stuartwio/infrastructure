@@ -31,4 +31,5 @@ elif parted  --script --machine /dev/xvdk print | grep --silent '^1' && \
 else
     >&2 echo "Device $DEV incorrectly partitioned!"
     >&2 parted  --script --machine /dev/xvdk print
+    exit 1
 fi

@@ -1,6 +1,11 @@
 # Infrastructure
 
-TODO...
+This is the starting point, the beginning... This repository contains the
+necessary building blocks to bootstrap a cloud environment with an automated
+continuous delivery pipeline.
+
+- Jenkins 2
+- Git
 
 ## Contents
 

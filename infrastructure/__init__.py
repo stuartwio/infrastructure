@@ -12,7 +12,7 @@ class SeedDeployment(object):
         self._logger = logging.getLogger(__name__)
 
     def deploy(self):
-        prefix = 'io-stuartw-seed-test'
+        prefix = 'io-stuartw-seed'
 
         storage_stack_name = '{}-storage'.format(prefix)
         self.log_stack_deployment(storage_stack_name, 'aws')
