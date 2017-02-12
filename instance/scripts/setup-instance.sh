@@ -2,6 +2,10 @@
 
 DOCKER_REPO=stuartw.io
 GIT_REPO=https://github.com/stuartwio/infrastructure.git
+CORE_HOME=/home/core
+JENKINS_HOME=/media/volume/jenkins/home
+GIT_HOME=/media/volume/git/home
+GIT_SSH_HOME=/media/volume/git/ssh
 
 git clone "$GIT_REPO"
 
@@ -13,94 +17,72 @@ groupadd --gid 1000 jenkins
 
 useradd --uid 1001 \
   --create-home \
-  --home-dir /home/git \
+  --skel /usr/share/skel \
+  --home-dir "$GIT_HOME" \
   --gid git \
   --shell /bin/nologin \
   git
 useradd --uid 1000 \
   --create-home \
-  --home-dir /home/jenkins \
+  --skel /usr/share/skel \
+  --home-dir "$JENKINS_HOME" \
   --gid jenkins \
   --shell /sbin/nologin \
   jenkins
 
-if [[ ! -d /var/lib/docker/volumes/jenkins-volume ]] ; then
-    docker volume create \
-        --driver local \
-        --name jenkins-volume
-fi
-
-if [[ ! -d /var/lib/docker/volumes/git-volume ]] ; then
-    docker volume create \
-        --driver local \
-        --name git-volume
-fi
-
-if [[ ! -d /var/lib/docker/volumes/git-ssh-volume ]] ; then
-    docker volume create \
-        --driver local \
-        --name git-ssh-volume
-fi
-
-docker create \
-    --interactive \
-    --volume jenkins-volume:/jenkins-volume \
-    --volume git-volume:/git-volume \
-    --volume git-ssh-volume:/etc/ssh \
+docker run \
+    --rm \
+    --volume "$JENKINS_HOME:/jenkins-volume" \
+    --volume "$GIT_HOME:/git-volume" \
+    --volume "$GIT_SSH_HOME:/etc/ssh" \
     --name setup \
-    alpine /bin/sh
+    alpine setup /bin/sh -xc "apk update && apk add openssh"
 
-docker start setup
-docker exec setup /bin/sh -xc "apk update && apk add openssh"
+sed -i 's/#\?PasswordAuthentication\b.*/PasswordAuthentication no/' "$GIT_SSH_HOME/sshd_config"
+sed -i 's/#\?ChallengeResponseAuthentication\b.*/ChallengeResponseAuthentication no/' "$GIT_SSH_HOME/sshd_config"
+sed -i 's/#\?PermitRootLogin\b.*$/PermitRootLogin no/' "$GIT_SSH_HOME/sshd_config"
 
-docker exec setup /bin/sh -xc "sed -i 's/#\?PasswordAuthentication\b.*/PasswordAuthentication no/' /etc/ssh/sshd_config"
-docker exec setup /bin/sh -xc "sed -i 's/#\?ChallengeResponseAuthentication\b.*/ChallengeResponseAuthentication no/' /etc/ssh/sshd_config"
-docker exec setup /bin/sh -xc "sed -i 's/#\?PermitRootLogin\b.*$/PermitRootLogin no/' /etc/ssh/sshd_config"
-
-if docker exec setup /bin/sh -xc "[[ ! -f /etc/ssh/ssh_host_rsa_key ]]" ; then
-    docker exec setup /bin/sh -xc "ssh-keygen -N '' -t rsa -f /etc/ssh/ssh_host_rsa_key"
+if [[ ! -f "$GIT_SSH_HOME/ssh_host_rsa_key" ]] ; then
+    ssh-keygen -N '' -t rsa -f "$GIT_SSH_HOME/ssh_host_rsa_key"
 fi
 
-if docker exec setup /bin/sh -xc "[[ ! -f /etc/ssh/ssh_host_dsa_key ]]" ; then
-    docker exec setup /bin/sh -xc "ssh-keygen -N '' -t dsa -f /etc/ssh/ssh_host_dsa_key"
+if [[ ! -f "$GIT_SSH_HOME/ssh_host_dsa_key" ]] ; then
+    ssh-keygen -N '' -t dsa -f "$GIT_SSH_HOME/ssh_host_dsa_key"
 fi
 
-if docker exec setup /bin/sh -xc "[[ ! -f /etc/ssh/ssh_host_ecdsa_key ]]" ; then
-    docker exec setup /bin/sh -xc "ssh-keygen -N '' -t ecdsa -f /etc/ssh/ssh_host_ecdsa_key"
+if [[ ! -f "$GIT_SSH_HOME/ssh_host_ecdsa_key" ]] ; then
+    ssh-keygen -N '' -t ecdsa -f "$GIT_SSH_HOME/ssh_host_ecdsa_key"
 fi
 
-if docker exec setup /bin/sh -xc "[[ ! -f /etc/ssh/ssh_host_ed25519_key ]]" ; then
-    docker exec setup /bin/sh -xc "ssh-keygen -N '' -t ed25519 -f /etc/ssh/ssh_host_ed25519_key"
+if [[ ! -f "$GIT_SSH_HOME/ssh_host_ed25519_key" ]] ; then
+    ssh-keygen -N '' -t ed25519 -f "$GIT_SSH_HOME/ssh_host_ed25519_key"
 fi
 
-if docker exec setup /bin/sh -xc "[[ ! -d /git-volume/.ssh ]]" ; then
-    docker exec setup /bin/sh -xc "mkdir /git-volume/.ssh"
+if [[ ! -d "$GIT_HOME/.ssh" ]] ; then
+    mkdir "$GIT_HOME/.ssh"
 fi
 
-if docker exec setup /bin/sh -xc "[[ ! -f /git-volume/.ssh/authorized_keys ]]" ; then
-    docker exec setup /bin/sh -xc "touch /git-volume/.ssh/authorized_keys"
-    cat /home/core/.ssh/authorized_keys | docker exec setup /bin/sh -xc "cat - >> /git-volume/.ssh/authorized_keys"
+if [[ ! -f "$GIT_HOME/.ssh/authorized_keys" ]] ; then
+    touch "$GIT_HOME/.ssh/authorized_keys"
+    cat "$CORE_HOME/.ssh/authorized_keys" >> "$GIT_HOME/.ssh/authorized_keys"
 fi
 
-if docker exec setup /bin/sh -xc "[[ ! -d /jenkins-volume/.ssh ]]" ; then
-    docker exec setup /bin/sh -xc "mkdir /jenkins-volume/.ssh"
+if [[ ! -d "$JENKINS_HOME/.ssh" ]] ; then
+    mkdir "$JENKINS_HOME/.ssh"
 fi
 
-if docker exec setup /bin/sh -xc "[[ ! -f /jenkins-volume/.ssh/id_rsa ]]" ; then
-    docker exec setup /bin/sh -xc "ssh-keygen -t rsa -N "" -C jenkins -f /jenkins-volume/.ssh/id_rsa"
-    docker exec setup /bin/sh -xc "cat /jenkins-volume/.ssh/id_rsa.pub >> /git-volume/.ssh/authorized_keys"
+if [[ ! -f "$JENKINS_HOME/.ssh/id_rsa" ]] ; then
+    ssh-keygen -t rsa -N "" -C jenkins -f "$JENKINS_HOME/.ssh/id_rsa"
+    cat "$JENKINS_HOME/.ssh/id_rsa.pub" >> "$GIT_HOME/.ssh/authorized_keys"
 fi
 
-if docker exec setup /bin/sh -xc "[[ ! -d /git-volume/seed.git ]]" ; then
-    docker exec setup /bin/sh -xc "git init --bare /git-volume/seed.git"
+if [[ ! -d "$GIT_HOME/seed.git" ]] ; then
+    git init --bare "$GIT_HOME/seed.git"
 fi
-
-docker stop setup
-docker rm setup
 
 docker create \
-  --volume git-ssh-volume:/etc/ssh \
-  --volume git-volume:/home/git \
+  --volume "$GIT_SSH_HOME:/etc/ssh" \
+  --volume "$GIT_HOME:/home/git" \
   --memory-reservation 16m \
   --memory 16m \
   --memory-swap 16m \
@@ -109,7 +91,7 @@ docker create \
   --hostname git \
   stuartw.io/git
 docker create \
-  --volume jenkins-volume:/var/jenkins_home \
+  --volume "$JENKINS_HOME:/var/jenkins_home" \
   --link git:git \
   --publish 8080:8080 \
   --memory-reservation 768m \

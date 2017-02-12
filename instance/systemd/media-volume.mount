@@ -5,5 +5,5 @@ After=dev-xvdk.device format-volume.service
 
 [Mount]
 What=/dev/xvdk1
-Where=/var/lib/docker/volumes
+Where=/media/volume
 Type=ext4

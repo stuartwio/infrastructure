@@ -77,9 +77,9 @@ class SeedDeployment(object):
                         content=File('instance/systemd/format-volume.service').read()
                     ),
                     dict(
-                        name='var-lib-docker-volumes.mount',
+                        name='media-volume.mount',
                         command='start',
-                        content=File('instance/systemd/var-lib-docker-volumes.mount').read()
+                        content=File('instance/systemd/media-volume.mount').read()
                     ),
                     dict(
                         name='setup-instance.service',
