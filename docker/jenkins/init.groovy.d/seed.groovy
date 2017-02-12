@@ -7,7 +7,7 @@ import org.jenkinsci.plugins.workflow.cps.CpsScmFlowDefinition
 import org.jenkinsci.plugins.workflow.job.WorkflowJob
 
 def jenkins = Jenkins.instance
-def host = System.properties.getProperty('git.host', 'localhost')
+def host = System.properties.getProperty('git.host', 'git')
 
 if (!jenkins.jobNames.find { jobName -> jobName == "seed" }) {
 
