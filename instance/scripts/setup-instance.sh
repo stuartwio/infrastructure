@@ -15,20 +15,26 @@ groupadd --gid 1000 jenkins
 
 useradd --uid 1001 \
   --create-home \
+  --skel /usr/share/skel \
   --home-dir /media/volume/home/git \
   --gid git \
   --shell /bin/bash \
   git
 useradd --uid 1000 \
   --create-home \
+  --skel /usr/share/skel \
   --home-dir /media/volume/home/jenkins \
   --gid jenkins \
   --shell /sbin/nologin \
   jenkins
 
 touch /media/volume/home/git/.ssh/authorized_keys
-ssh-keygen -t rsa -C jenkins.stuartw.io -f /media/volume/home/jenkins/.ssh/id_rsa
+ssh-keygen -t rsa -C jenkins -f /media/volume/home/jenkins/.ssh/id_rsa
+cat /home/core/.ssh/authorized_keys >> /media/volume/home/git/.ssh/authorized_keys
 cat /media/volume/home/jenkins/.ssh/id_rsa.pub >> /media/volume/home/git/.ssh/authorized_keys
+
+git init --bare /media/volume/home/git/seed.git
+chown -R git:git /media/volume/home/git/seed.git
 
 docker create \
   --volume /media/volume/home/git:/home/git \
