@@ -13,7 +13,7 @@ if (!jenkins.jobNames.find { jobName -> jobName == "seed" }) {
 
     def job = jenkins.createProject(WorkflowJob, 'seed')
     job.addTrigger(new SCMTrigger('H/2 * * * *'))
-    def remote = new UserRemoteConfig("git@${host}:seed.git", null, null, 'jenkins-git')
+    def remote = new UserRemoteConfig("git@${host}:seed.git", null, null, 'git')
     def scm = new GitSCM(
             [remote] as List, [new BranchSpec("*/master")],
             false, [], null, null, [])
