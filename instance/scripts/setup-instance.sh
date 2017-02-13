@@ -94,6 +94,11 @@ chown -R jenkins:jenkins "$JENKINS_HOME"
 chown -R git:git "$GIT_HOME"
 chown -R git:git "$GIT_SSH_HOME"
 
+chmod 700 "$JENKINS_HOME/.ssh"
+chmod 600 "$JENKINS_HOME/.ssh/id_rsa"
+chmod 700 "$JENKINS_HOME/.ssh"
+chmod 600 "$GIT_HOME/.ssh/authorized_keys"
+
 docker create \
   --volume "$GIT_SSH_HOME:/etc/ssh" \
   --volume "$GIT_HOME:/home/git" \
