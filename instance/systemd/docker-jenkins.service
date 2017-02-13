@@ -1,7 +1,7 @@
 [Unit]
 Description=Jenkins container
-Requires=setup-instance.service
-After=setup-instance.service
+Requires=setup-instance.service docker.service
+After=setup-instance.service docker.service
 
 [Service]
 Restart=always

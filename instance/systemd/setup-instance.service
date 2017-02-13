@@ -1,7 +1,7 @@
 [Unit]
 Description=Instance setup
-Requires=home-jenkins.mount home-git.mount opt-git-ssh.mount git-clone.service
-After=home-jenkins.mount home-git.mount opt-git-ssh.mount git-clone.service
+Requires=home-jenkins.mount home-git.mount opt-git-ssh.mount git-clone.service docker.service network-online.target
+After=home-jenkins.mount home-git.mount opt-git-ssh.mount git-clone.service docker.service network-online.target
 ConditionFirstBoot=true
 
 [Service]
