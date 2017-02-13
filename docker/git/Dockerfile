@@ -1,6 +1,7 @@
 FROM alpine
 
 RUN apk update && apk add openssh git && \
+    mkdir /var/run/sshd && \
     addgroup -g 1001 git && \
     adduser -h /home/git -s /bin/sh -D -G git -u 1001 git
 

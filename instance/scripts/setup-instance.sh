@@ -13,9 +13,15 @@ docker build --tag "$DOCKER_REPO/git" /root/infrastructure/docker/git
 # prevents accidental overlap of users between the host and container
 # and simplifies permissions.
 
+groupadd --gid 22 sshd
 groupadd --gid 1001 git
 groupadd --gid 1000 jenkins
 
+useradd --uid 22 \
+  --home-dir /dev/null \
+  --gid sshd \
+  --shell /sbin/nologin \
+  sshd
 useradd --uid 1001 \
   --create-home \
   --skel /usr/share/skel \
