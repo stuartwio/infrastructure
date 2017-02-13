@@ -92,7 +92,6 @@ fi
 
 chown -R jenkins:jenkins "$JENKINS_HOME"
 chown -R git:git "$GIT_HOME"
-chown -R git:git "$GIT_SSH_HOME"
 
 chmod 700 "$JENKINS_HOME/.ssh"
 chmod 600 "$JENKINS_HOME/.ssh/id_rsa"
