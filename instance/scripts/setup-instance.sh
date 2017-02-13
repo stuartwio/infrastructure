@@ -1,13 +1,10 @@
 #!/bin/bash -x
 
 DOCKER_REPO=stuartw.io
-GIT_REPO=https://github.com/stuartwio/infrastructure.git
 CORE_HOME=/home/core
 JENKINS_HOME=/home/jenkins
 GIT_HOME=/home/git
 GIT_SSH_HOME=/opt/git/ssh
-
-git clone "$GIT_REPO"
 
 docker build --tag "$DOCKER_REPO/jenkins" /root/infrastructure/docker/jenkins
 docker build --tag "$DOCKER_REPO/git" /root/infrastructure/docker/git
