@@ -1,5 +1,5 @@
 [Unit]
-Description=Checks out the Git repository
+Description=Instance setup
 Requires=home-jenkins.mount home-git.mount opt-git-ssh.mount git-clone.service
 After=home-jenkins.mount home-git.mount opt-git-ssh.mount git-clone.service
 ConditionFirstBoot=true
