@@ -9,6 +9,6 @@ EXPOSE 22
 VOLUME /etc/ssh
 VOLUME /home/git
 
-USER git
+USER sshd
 
 CMD ["/usr/sbin/sshd", "-D"]
